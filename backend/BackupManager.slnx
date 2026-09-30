@@ -1,5 +1,12 @@
-<Solution><Project Path="src/BackupManager.Domain/BackupManager.Domain.csproj" /><Project Path="src/BackupManager.Application/BackupManager.Application.csproj" /><Project Path="src/BackupManager.Infrastructure/BackupManager.Infrastructure.csproj" /><Project Path="src/BackupManager.Plugins.SqlServer/BackupManager.Plugins.SqlServer.csproj" />
-  <Folder Name="/src/" />
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/BackupManager.API/BackupManager.API.csproj" />
+    <Project Path="src/BackupManager.Application/BackupManager.Application.csproj" />
+    <Project Path="src/BackupManager.Domain/BackupManager.Domain.csproj" />
+    <Project Path="src/BackupManager.Infrastructure/BackupManager.Infrastructure.csproj" />
+    <Project Path="src/BackupManager.Plugins.SqlServer/BackupManager.Plugins.SqlServer.csproj" />
+    <Project Path="tests/BackupManager.ContractTests/BackupManager.ContractTests.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/BackupManager.SecurityTests/BackupManager.SecurityTests.csproj" />
-  </Folder><Project Path="src/BackupManager.API/BackupManager.API.csproj" /><Project Path="tests/BackupManager.ContractTests/BackupManager.ContractTests.csproj" /></Solution>
+  </Folder></Solution>
