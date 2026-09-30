@@ -12,7 +12,7 @@ $invalid = Invoke-WebRequest "$BaseUrl/database-connections/test" -Method Post -
 Assert-Response $invalid 400 'VALIDATION_FAILED'
 $missing = Invoke-WebRequest "$BaseUrl/database-connections/00000000-0000-0000-0000-000000000001" -SkipHttpErrorCheck
 Assert-Response $missing 404 'NOT_FOUND'
-$body = @{ provider='sqlserver'; host='127.0.0.1'; port=1; authenticationType='sqlserver'; username='test-user'; password='test-password-marker'; connectionTimeout=1; commandTimeout=1 } | ConvertTo-Json
+$body = @{ name='Unreachable test'; provider='sqlserver'; host='127.0.0.1'; port=1; authenticationType='sqlserver'; username='test-user'; password='test-password-marker'; connectionTimeout=1; commandTimeout=1 } | ConvertTo-Json
 foreach ($endpoint in @('test', 'discover', '')) {
     $response = Invoke-WebRequest "$BaseUrl/database-connections/$endpoint" -Method Post -ContentType 'application/json' -Body $body -SkipHttpErrorCheck
     Assert-Response $response 422 'CONNECTION_FAILED'

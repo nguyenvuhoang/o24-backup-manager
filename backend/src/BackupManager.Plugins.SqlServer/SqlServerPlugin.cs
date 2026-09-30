@@ -16,7 +16,7 @@ public sealed class SqlServerPlugin(ProcessRunner runner, SecretVault vault)
         return new(true, $"Found {items.Length} databases.", items);
     }
 
-    public async Task<string> BackupAsync(SqlServerOptions options, string database, string directory, CancellationToken ct)
+    public async Task<string> BackupAsync(SqlServerOptions options, string database, string directory, CancellationToken ct, string? resolvedPassword = null)
     {
         Directory.CreateDirectory(directory);
         var safeName = string.Concat(database.Select(ch => Path.GetInvalidFileNameChars().Contains(ch) ? '_' : ch));
@@ -24,7 +24,7 @@ public sealed class SqlServerPlugin(ProcessRunner runner, SecretVault vault)
         var db = database.Replace("]", "]]", StringComparison.Ordinal);
         var disk = path.Replace("'", "''", StringComparison.Ordinal);
         var sql = $"BACKUP DATABASE [{db}] TO DISK=N'{disk}' WITH INIT, COMPRESSION, CHECKSUM, STATS=5; RESTORE VERIFYONLY FROM DISK=N'{disk}' WITH CHECKSUM;";
-        var (args, environment) = await ConnectionArgs(options, ct);
+        var (args, environment) = await ConnectionArgs(options, ct, resolvedPassword);
         args.AddRange(["-b", "-Q", sql]);
         var result = await runner.RunAsync("sqlcmd", args, ct, environment);
         if (result.ExitCode != 0 || result.Error.Contains("Msg ", StringComparison.OrdinalIgnoreCase) || !File.Exists(path) || new FileInfo(path).Length == 0)
@@ -32,7 +32,7 @@ public sealed class SqlServerPlugin(ProcessRunner runner, SecretVault vault)
         return path;
     }
 
-    private async Task<(List<string> Arguments, Dictionary<string, string?> Environment)> ConnectionArgs(SqlServerOptions options, CancellationToken ct)
+    private async Task<(List<string> Arguments, Dictionary<string, string?> Environment)> ConnectionArgs(SqlServerOptions options, CancellationToken ct, string? resolvedPassword = null)
     {
         string? help = null;
         if (options.Encrypt.HasValue)
@@ -56,7 +56,7 @@ public sealed class SqlServerPlugin(ProcessRunner runner, SecretVault vault)
         if (options.IntegratedSecurity) args.Add("-E");
         else
         {
-            var password = await vault.ResolveAsync(options.PasswordSecret) ?? throw new InvalidOperationException("SQL password secret is missing.");
+            var password = resolvedPassword ?? await vault.ResolveAsync(options.PasswordSecret) ?? throw new InvalidOperationException("SQL password secret is missing.");
             args.AddRange(["-U", options.Username ?? ""]);
             environment["SQLCMDPASSWORD"] = password;
         }

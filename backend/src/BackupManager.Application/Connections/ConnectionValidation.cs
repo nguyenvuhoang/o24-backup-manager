@@ -12,6 +12,8 @@ public static class ConnectionValidation
         if (string.IsNullOrWhiteSpace(o.Host) || o.Host.Length > 255 || !Regex.IsMatch(o.Host.Trim(), @"^[a-zA-Z0-9_.:\[\]-]+$"))
             Error("host", "Nhập hostname/IP; nhập instance và port ở ô riêng.");
         if (o.Port is < 1 or > 65535) Error("port", "Port phải từ 1 đến 65535.");
+        if (o.UseNamedInstanceDiscovery && o.Port is null && string.IsNullOrWhiteSpace(o.InstanceName))
+            Error("instanceName", "Nhập Instance Name để sử dụng Named Instance discovery.");
         if (!string.IsNullOrEmpty(o.InstanceName) && (o.InstanceName.Length > 128 || !Regex.IsMatch(o.InstanceName, @"^[a-zA-Z0-9_$-]+$")))
             Error("instanceName", "Instance name không hợp lệ.");
         if (o.AuthenticationType is not ("windows" or "sqlserver")) Error("authenticationType", "Kiểu xác thực không hợp lệ.");

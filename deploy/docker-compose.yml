@@ -7,7 +7,7 @@ services:
     restart: unless-stopped
     expose: ["5088"]
     environment:
-      BackupManager__MasterKey: ${BACKUP_MANAGER_MASTER_KEY:?Set BACKUP_MANAGER_MASTER_KEY}
+      BackupManager__Security__MasterKey: ${BACKUP_MANAGER_MASTER_KEY:?Set BACKUP_MANAGER_MASTER_KEY to a Base64 32-byte key}
       FrontendOrigin: http://localhost:3000
     volumes:
       - backup-manager-data:/app/data

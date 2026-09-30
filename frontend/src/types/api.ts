@@ -1,3 +1,4 @@
+import type { DatabaseProvider } from '@/lib/database-providers';
 export type RunStatus = 'Queued' | 'Running' | 'Succeeded' | 'Failed' | 'Cancelled';
 export interface SqlServerOptions { server: string; integratedSecurity: boolean; username?: string; passwordSecret?: string }
 export interface BackupJob { id?: string; name: string; enabled: boolean; connectionId?: string; sqlServer?: SqlServerOptions | null; databases: string[]; backupDirectory: string; retentionDays: number; sftp?: { enabled: boolean; host: string; port: number; username: string; remotePath: string; identityFile?: string }; telegram?: { enabled: boolean; chatId: string; botTokenSecret: string; prefix: string } }
@@ -6,10 +7,11 @@ export interface DiscoveryResult { success: boolean; message: string; items?: st
 
 export interface DatabaseConnectionForm {
   name: string;
-  provider: 'sqlserver';
+  provider: DatabaseProvider;
   host: string;
   port: number | null;
   instanceName: string | null;
+  useNamedInstanceDiscovery?: boolean;
   authenticationType: 'windows' | 'sqlserver';
   username: string | null;
   password: string | null;
@@ -24,5 +26,5 @@ export interface DatabaseServerInfo { name: string; provider: string; version: s
 export interface DatabaseInfo { name: string; status: string; sizeMb: number | null; createdAt: string | null; isAccessible: boolean }
 export interface DatabaseDiscoveryResult { success: boolean; server: DatabaseServerInfo; databases: DatabaseInfo[] }
 export interface DatabaseTestResult { success: boolean; serverName: string; databaseEngine: string; version: string; message: string }
-export interface SavedDatabaseConnection { id: string; configuration: Omit<DatabaseConnectionForm, 'password'>; hasPassword: boolean; createdAtUtc: string; updatedAtUtc: string }
+export interface SavedDatabaseConnection extends Omit<DatabaseConnectionForm, 'password'> { id: string; hasPassword: boolean; createdAtUtc: string; updatedAtUtc: string }
 export interface CreateBackupJobRequest { id: string; name: string; connectionId: string; databases: string[]; backupDirectory: string; retentionDays: number; enabled: boolean }

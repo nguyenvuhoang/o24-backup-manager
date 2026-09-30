@@ -78,4 +78,4 @@ dotnet build .\backend\BackupManager.slnx -c Release
 
 Flow tạo job mới hỗ trợ test/discover SQL Server qua Microsoft.Data.SqlClient, lưu connection riêng và resolve vào engine sqlcmd. Xem [implementation, API, cấu hình và test](docs/database-connections-implementation.md).
 
-Job mới cần sqlcmd ODBC hỗ trợ `-N[s|m|o]` (kiểm tra bằng `sqlcmd -?`) để đồng bộ lựa chọn Encrypt. Job cũ giữ cách gọi sqlcmd trước đây. Không cần migration SQL; `data/connections.json` tự tạo khi lưu kết nối đầu tiên. Restart backend sau khi build để nạp API mới.
+Job mới cần sqlcmd ODBC hỗ trợ `-N[s|m|o]` (kiểm tra bằng `sqlcmd -?`) để đồng bộ lựa chọn Encrypt. Job cũ giữ cách gọi sqlcmd trước đây. Metadata dùng SQLite tại `backend/src/BackupManager.API/data/backupmanager.db`; EF migration tự chạy khi API khởi động. Connection và job JSON cũ được import một lần, giữ nguyên file gốc. Password connection được mã hóa AES-GCM trực tiếp trong SQLite. Giữ ổn định `BackupManager__MasterKey` qua các lần restart. Restart backend sau khi build để nạp API mới.

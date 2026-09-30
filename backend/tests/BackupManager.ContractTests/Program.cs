@@ -1,3 +1,5 @@
+using BackupManager.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 using BackupManager.Application.Connections;
 using BackupManager.Domain.Models;
 using BackupManager.Plugins.SqlServer;
@@ -10,10 +12,17 @@ using System.Text.Json;
 
 var passed = 0;
 void Check(bool condition, string name) { if (!condition) throw new Exception(name); passed++; Console.WriteLine($"PASS {name}"); }
-var options = new DatabaseConnectionOptions { Host = "db.example", InstanceName = "REPORTS" };
-Check(SqlServerConnectionSettings.ResolveDataSource(options) == @"db.example\REPORTS", "named instance");
+var options = new DatabaseConnectionOptions { Name = "Test connection", Host = "db.example", InstanceName = "REPORTS" };
+Check(SqlServerConnectionSettings.ResolveDataSource(options) == "tcp:db.example,1433", "null port resolves to SQL Server default even with instance");
 Check(SqlServerConnectionSettings.ResolveDataSource(options with { Port = 1444 }) == "tcp:db.example,1444", "explicit port overrides instance");
-Check(SqlServerConnectionSettings.ResolveDataSource(options with { InstanceName = null }) == "db.example", "default instance");
+Check(SqlServerConnectionSettings.ResolveDataSource(options with { InstanceName = null }) == "tcp:db.example,1433", "default TCP endpoint");
+Check(SqlServerConnectionSettings.ResolveDataSource(options with { Port = 1500 }) == "tcp:db.example,1500", "custom TCP endpoint");
+Check(SqlServerConnectionSettings.ResolveDataSource(options with { UseNamedInstanceDiscovery = true }) == @"db.example\REPORTS", "explicit named instance discovery remains supported");
+Check(SqlServerConnectionSettings.ResolveDataSource(options with { UseNamedInstanceDiscovery = true, Port = 1500 }) == "tcp:db.example,1500", "explicit port wins over discovery flag");
+Check(ConnectionValidation.GetErrors(options with { UseNamedInstanceDiscovery = true, InstanceName = null }).ContainsKey("instanceName"), "discovery requires an instance");
+Check(DatabaseProviders.Find("sqlserver")?.DefaultPort == 1433 && DatabaseProviders.Find("postgresql")?.DefaultPort == 5432 && DatabaseProviders.Find("oracle")?.DefaultPort == 1521, "provider metadata default ports");
+Check(DatabaseConnectionOptions.From(new DatabaseConnectionSettings { Port = null }).Port == 1433, "legacy null port normalized on load");
+Check(DatabaseConnectionOptions.From(new DatabaseConnectionSettings { Port = 1500 }).Port == 1500, "custom port preserved on load");
 var sqlOptions = options with { AuthenticationType = "sqlserver", Username = "user", Password = "secret;Password=other" };
 var builder = new SqlConnectionStringBuilder(SqlServerConnectionSettings.BuildConnectionString(sqlOptions));
 Check(builder.Password == sqlOptions.Password && !builder.IntegratedSecurity, "builder escapes credentials");
@@ -27,13 +36,18 @@ Check(ConnectionValidation.GetErrors(options with { Host = "db;Password=bad" }).
 var directory = Path.Combine(Path.GetTempPath(), "BackupManager-contracts-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(directory);
 var environment = new TestEnvironment { ContentRootPath = directory };
-var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["BackupManager:MasterKey"] = new string('k', 40) }).Build();
+var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["BackupManager:Security:MasterKey"] = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)) }).Build();
 var vault = new SecretVault(environment, configuration);
-var store = new JsonStore(environment);
+Directory.CreateDirectory(Path.Combine(directory, "data"));
+var factory = new TestDbFactory(Path.Combine(directory, "data", "backupmanager.db"));
+var store = new SqliteConfigurationStore(factory);
+await store.InitializeAsync(new JsonStore(environment), vault);
 var provider = new TestProvider();
 var service = new DatabaseConnectionService(store, vault, new DatabaseProviderResolver([provider]));
 await service.TestAsync(sqlOptions, default);
+Check(provider.LastPort == 1433, "test use case supplies normalized port to provider");
 await service.DiscoverAsync(sqlOptions, default);
+Check(provider.LastPort == 1433, "discovery use case supplies normalized port to provider");
 Check((await store.GetConnectionsAsync()).Count == 0, "test/discover never persist");
 provider.Fail = true;
 try { await service.SaveAsync(null, sqlOptions, default); throw new Exception("Expected failure"); }
@@ -41,11 +55,23 @@ catch (ConfigurationException e) { Check(e.Code == "CONNECTION_FAILED", "failed 
 Check((await store.GetConnectionsAsync()).Count == 0, "no saved connection after failure");
 provider.Fail = false;
 var saved = await service.SaveAsync(null, sqlOptions, default);
+Check((await service.GetAsync(saved.Id)).Settings.Port == 1433, "save persists resolved default port");
+var customConnection = await service.SaveAsync(null, sqlOptions with { Port = 1500 }, default);
+Check(customConnection.Port == 1500, "save retains custom TCP port");
+await service.DeleteAsync(customConnection.Id, default);
+Check(File.Exists(Path.Combine(directory, "data", "backupmanager.db")), "saved connection lives in SQLite");
 var json = JsonSerializer.Serialize(saved);
 Check(!json.Contains("secret;") && !json.Contains("passwordSecret", StringComparison.OrdinalIgnoreCase) && !json.Contains("encryptedPassword", StringComparison.OrdinalIgnoreCase), "response contains no credentials or secret reference");
-var persisted = await File.ReadAllTextAsync(Path.Combine(directory, "data", "connections.json"));
-Check(!persisted.Contains("secret;"), "connection file has no plaintext password");
-Check(!(await File.ReadAllTextAsync(Path.Combine(directory, "data", "secrets.json"))).Contains("secret;"), "vault file contains only ciphertext");
+await using (var db = factory.CreateDbContext())
+{
+    var row = await db.DatabaseConnections.SingleAsync();
+    Check(row.EncryptedPassword is not null && row.EncryptedPassword != sqlOptions.Password, "SQLite contains AES-GCM ciphertext");
+    Check((await db.Database.GetAppliedMigrationsAsync()).Count() == 1, "initial migration applied");
+}
+Check(!File.Exists(Path.Combine(directory, "data", "secrets.json")), "new connection never writes secrets JSON");
+var restartedStore = new SqliteConfigurationStore(new TestDbFactory(Path.Combine(directory, "data", "backupmanager.db")));
+await restartedStore.InitializeAsync(new JsonStore(environment), vault);
+Check((await restartedStore.GetConnectionsAsync()).Single().Id == saved.Id, "connection survives new store/context after restart");
 Check((await service.ResolveOptionsAsync(saved.Id)).Password == sqlOptions.Password, "vault roundtrip");
 await service.SaveAsync(saved.Id, sqlOptions with { Password = null }, default);
 Check((await service.ResolveOptionsAsync(saved.Id)).Password == sqlOptions.Password, "null update preserves password");
@@ -72,7 +98,7 @@ catch (ConfigurationException e) { Check(e.Code == "DATABASE_UNAVAILABLE", "save
 provider.Accessible = true;
 var connection = await service.GetAsync(saved.Id);
 var legacyOptions = SqlServerConnectionSettings.ForBackup(connection);
-Check(legacyOptions.Server == @"db.example\REPORTS" && await vault.ResolveAsync(legacyOptions.PasswordSecret) == "replacement", "backup bridge resolves saved configuration and vault reference");
+Check(legacyOptions.Server == "tcp:db.example,1433" && vault.DecryptPassword(connection.EncryptedPassword) == "replacement", "backup bridge resolves default port and SQLite ciphertext");
 var legacyJob = new BackupJob { Name = "Legacy", SqlServer = new() { Server = "legacy-host" }, Databases = ["LegacyDb"], BackupDirectory = directory };
 await store.SaveJobAsync(legacyJob);
 await jobs.SaveAsync(legacyJob, default);
@@ -80,7 +106,7 @@ Check((await store.GetJobsAsync()).Any(j => j.SqlServer?.Server == "legacy-host"
 await Task.WhenAll(Enumerable.Range(0, 12).Select(i => vault.StoreAsync($"concurrent-{i}", $"value-{i}")));
 Check((await Task.WhenAll(Enumerable.Range(0, 12).Select(i => vault.ResolveAsync($"concurrent-{i}")))).Count(v => v is not null) == 12, "concurrent vault writes preserve all secrets");
 await Task.WhenAll(Enumerable.Range(0, 12).Select(i => store.SaveJobAsync(new BackupJob { Name = $"parallel-{i}" })));
-Check((await store.GetJobsAsync()).Count == 14, "concurrent JSON mutations preserve jobs");
+Check((await store.GetJobsAsync()).Count == 14, "concurrent SQLite mutations preserve jobs");
 await service.DeleteAsync((await service.SaveAsync(null, options, default)).Id, default);
 Check((await store.GetConnectionsAsync()).Count == 1, "unused connection can be deleted");
 try { await service.SaveAsync(saved.Id, sqlOptions with { Host = "different-server", Password = "replacement" }, default); throw new Exception("Referenced server changed"); }
@@ -96,6 +122,8 @@ Check(SqlServerConnectionSettings.BuildSqlcmdArguments(legacyOptions with { Encr
 try { SqlServerConnectionSettings.BuildSqlcmdArguments(legacyOptions, "old sqlcmd -N"); throw new Exception("Old encryption flags accepted"); }
 catch (ConfigurationException e) { Check(e.Code == "SQLCMD_UNSUPPORTED", "unsupported sqlcmd fails with clear deployment message"); }
 Check(SqlServerConnectionSettings.BuildSqlcmdArguments(new SqlServerOptions { Server = "legacy" }, null).Contains("-x"), "legacy backup stays supported with substitution disabled");
+await LegacyImportTests.RunAsync(Check, directory);
+await HttpPersistenceTests.RunAsync(Check, directory);
 Console.WriteLine($"{passed} contract assertions passed. Test artifacts: {directory}");
 
 sealed class TestProvider : IDatabaseProvider
@@ -105,9 +133,15 @@ sealed class TestProvider : IDatabaseProvider
     public string Status { get; set; } = "ONLINE";
     public bool Accessible { get; set; } = true;
     public Func<Task>? DuringDiscovery { get; set; }
-    public Task<DatabaseConnectionTestResult> TestConnectionAsync(DatabaseConnectionOptions o, CancellationToken ct) => Task.FromResult(new DatabaseConnectionTestResult(true, o.Host, "Microsoft SQL Server", "test", "ok"));
+    public int? LastPort { get; private set; }
+    public Task<DatabaseConnectionTestResult> TestConnectionAsync(DatabaseConnectionOptions o, CancellationToken ct)
+    {
+        LastPort = o.Port;
+        return Task.FromResult(new DatabaseConnectionTestResult(true, o.Host, "Microsoft SQL Server", "test", "ok"));
+    }
     public async Task<DatabaseDiscoveryResult> DiscoverDatabasesAsync(DatabaseConnectionOptions o, CancellationToken ct)
     {
+        LastPort = o.Port;
         if (Fail) throw new ConfigurationException("CONNECTION_FAILED", "Test failure");
         if (DuringDiscovery is not null) await DuringDiscovery();
         return new DatabaseDiscoveryResult(true, new(o.Host, Provider, "test"), [new("Sales", Status, 100, null, Accessible)]);
@@ -120,3 +154,12 @@ sealed class TestEnvironment : IHostEnvironment
     public string ContentRootPath { get; set; } = "";
     public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
 }
+
+
+sealed class TestDbFactory(string path) : IDbContextFactory<MetadataDbContext>
+{
+    public MetadataDbContext CreateDbContext() => new(new DbContextOptionsBuilder<MetadataDbContext>().UseSqlite($"Data Source={path};Foreign Keys=True").Options);
+}
+
+
+

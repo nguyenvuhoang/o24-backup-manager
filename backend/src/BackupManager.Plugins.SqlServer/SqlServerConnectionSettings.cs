@@ -26,8 +26,8 @@ public static class SqlServerConnectionSettings
     public static string ResolveDataSource(DatabaseConnectionSettings options)
     {
         var host = options.Host.Trim();
-        // An explicit TCP port addresses the listener directly, bypassing SQL Browser.
-        if (options.Port is int port) return $"tcp:{host},{port}";
+        // Explicit and provider-default TCP ports bypass SQL Browser. Discovery must be opted into.
+        if (DatabaseProviders.ResolvePort(options) is int port) return $"tcp:{host},{port}";
         return string.IsNullOrWhiteSpace(options.InstanceName) ? host : $"{host}\\{options.InstanceName.Trim()}";
     }
     public static string BuildConnectionString(DatabaseConnectionOptions options)

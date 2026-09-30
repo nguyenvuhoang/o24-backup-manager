@@ -16,13 +16,15 @@ public sealed class BackupPipeline(JsonStore store, SqlServerPlugin sql, Process
         var runDirectory = Path.GetFullPath(Path.Combine(job.BackupDirectory, $"{Sanitize(job.Name)}_{DateTime.Now:yyyyMMdd_HHmmss}"));
         try
         {
-            var sqlOptions = job.ConnectionId is Guid connectionId
-                ? SqlServerConnectionSettings.ForBackup(await connections.GetAsync(connectionId))
+            var savedConnection = job.ConnectionId is Guid connectionId ? await connections.GetAsync(connectionId) : null;
+            var password = vault.DecryptPassword(savedConnection?.EncryptedPassword);
+            var sqlOptions = savedConnection is not null
+                ? SqlServerConnectionSettings.ForBackup(savedConnection)
                 : job.SqlServer ?? throw new ConfigurationException("CONNECTION_REQUIRED", "Job không có cấu hình kết nối.");
             var backup = AddStage(run, "Backup and verify databases");
             foreach (var database in job.Databases)
             {
-                var path = await sql.BackupAsync(sqlOptions, database, runDirectory, ct);
+                var path = await sql.BackupAsync(sqlOptions, database, runDirectory, ct, password);
                 run.Artifacts.Add(await Artifact(path, ct));
                 backup.Message = $"{run.Artifacts.Count}/{job.Databases.Length} database(s) verified";
                 await store.SaveRunAsync(run);

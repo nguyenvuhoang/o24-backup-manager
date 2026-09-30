@@ -1,124 +1,74 @@
-# Database connections và màn hình tạo Backup Job
+# Database Connection persistence
 
-Đã triển khai flow frontend → .NET → Microsoft.Data.SqlClient → metadata → lưu connection → lưu job với ConnectionId → resolve vào engine sqlcmd hiện có. Không có mock API hoặc danh sách database hard-code trong implementation.
+## Before
 
-## Backend
+CRUD already existed. DatabaseConnectionService + JsonStore wrote connections.json and jobs.json, with references to AES-GCM passwords in secrets.json. Test/Discover were transient. JobForm created the connection only when saving a job; reloading before Save Job lost the React configuration.
 
-### Files tạo mới
+## After
 
-- `backend/src/BackupManager.Domain/Models/DatabaseConnection.cs`: settings không chứa password và entity connection chứa secret reference, timestamps.
-- `backend/src/BackupManager.Application/Connections/Contracts.cs`: DTO, provider/resolver, store/vault contracts, clean domain errors.
-- `backend/src/BackupManager.Application/Connections/ConnectionValidation.cs`: host, auth, port, timeout và kích thước input.
-- `backend/src/BackupManager.Application/Connections/DatabaseConnectionService.cs`: test/discover/CRUD, kiểm tra thật trước persistence, giữ password cũ khi update null/rỗng.
-- `backend/src/BackupManager.Application/Connections/BackupJobService.cs`: validation, kiểm tra database ONLINE/access khi lưu, compatibility job cũ.
-- `backend/src/BackupManager.Plugins.SqlServer/SqlServerConnectionSettings.cs`: SqlConnectionStringBuilder, resolve DataSource, bridge sqlcmd.
-- `backend/src/BackupManager.Plugins.SqlServer/SqlServerDatabaseProvider.cs`: SqlClient test/discover, cancellation, dispose, metadata query cố định.
-- `backend/src/BackupManager.API/Endpoints/DatabaseConnectionEndpoints.cs`: Minimal API CRUD/test/discover.
-- `backend/src/BackupManager.API/Endpoints/ConfigurationErrorFilter.cs`: HTTP mapping không trả exception/stack trace.
-- `backend/tests/BackupManager.ContractTests/BackupManager.ContractTests.csproj` và `Program.cs`: console contract suite, không cần framework test bổ sung.
-- `scripts/test-connection-api.ps1`: kiểm tra HTTP validation và failure path với SqlClient thật.
+Infrastructure owns MetadataDbContext and SqliteConfigurationStore (EF Core SQLite 10.0.9; SQLitePCLRaw 3.0.5). Domain/Application have no EF/SQLite dependency.
 
-### Files sửa
+Default file: backend/src/BackupManager.API/data/backupmanager.db, relative to API ContentRoot when deployed. Startup applies migration 20260930070136_InitialMetadata automatically.
 
-- `backend/BackupManager.slnx`: thêm test project.
-- `backend/src/BackupManager.Domain/Models/BackupModels.cs`: nullable legacy SqlServer, ConnectionId và cấu hình bridge.
-- `backend/src/BackupManager.Infrastructure/Services/JsonStore.cs`: connections.json, mutation atomic có khóa, ngăn xóa connection đang được dùng và kiểm tra revision khi lưu job.
-- `backend/src/BackupManager.Infrastructure/Services/SecretVault.cs`: triển khai abstraction, serial hóa các mutation AES-GCM, ghi atomic.
-- `backend/src/BackupManager.Plugins.SqlServer/BackupManager.Plugins.SqlServer.csproj`: Microsoft.Data.SqlClient 7.0.3.
-- `backend/src/BackupManager.Plugins.SqlServer/SqlServerPlugin.cs`: cấu hình từ connection, preflight sqlcmd, tắt SQLCMD variable substitution bằng `-x` để tên database/path không mở rộng `$(SQLCMDPASSWORD)`.
-- `backend/src/BackupManager.API/Program.cs`: DI/endpoints/clean malformed-JSON errors.
-- `backend/src/BackupManager.API/Services/BackupPipeline.cs`: resolve ConnectionId trước backup; giữ BACKUP/VERIFY/ZIP/hash/SCP/retention/Telegram.
-- `.gitignore`: loại runtime data API khỏi source control.
+Tables:
+- DatabaseConnections: flat settings, EncryptedPassword, timestamps; Name/Provider/Host required.
+- BackupJobs: ConnectionId and job settings; new jobs have no copied connection credentials.
+- BackupJobDatabases: composite key BackupJobId + DatabaseName.
+- MetadataStates: one-time legacy import marker. EF also maintains migration tables.
 
-### Endpoints
+Connection -> jobs uses RESTRICT. Job -> databases uses CASCADE. Delete referenced connection returns 409 CONNECTION_IN_USE. Changing the server target of a referenced connection is rejected; job save checks connection version after discovery.
+
+Legacy JSON connections/jobs import transactionally once, retaining IDs and references. Secret references are resolved and re-encrypted into SQLite. Original files remain untouched for recovery; deleted objects do not return on restart. Legacy inline jobs stay readable until converted; new jobs require ConnectionId. Run history and non-connection legacy secrets retain their existing stores.
+
+## API
+
+Base: /api/v1/database-connections
 
 | Method | Path | Behavior |
 |---|---|---|
-| POST | `/api/v1/database-connections/test` | Kết nối thật, không lưu |
-| POST | `/api/v1/database-connections/discover` | Kết nối và lấy metadata thật, không lưu |
-| GET | `/api/v1/database-connections` | Metadata các connection, không trả password/secret reference/ciphertext |
-| GET | `/api/v1/database-connections/{id}` | Metadata một connection |
-| POST | `/api/v1/database-connections` | Discover lại trước khi lưu, HTTP 201 |
-| PUT | `/api/v1/database-connections/{id}` | Cập nhật; password null/rỗng giữ giá trị trước |
-| DELETE | `/api/v1/database-connections/{id}` | HTTP 204; HTTP 409 nếu đang được job dùng |
-| POST | `/api/v1/jobs` | Endpoint cũ được mở rộng để dùng ConnectionId |
+| GET | / | Safe flat metadata list |
+| GET | /{id} | Safe flat metadata |
+| POST | / | Require name, test, discover, encrypt and persist |
+| PUT | /{id} | Same ID; blank/null password preserves ciphertext |
+| DELETE | /{id} | Delete unused connection; 409 when referenced |
+| POST | /test | Transient options, no persistence |
+| POST | /discover | Transient options, no persistence |
+| POST | /{id}/test | Resolve stored credentials internally |
+| POST | /{id}/discover | Resolve stored credentials internally |
+| POST | /{id}/test-options | Test unsaved edits, reuse stored password when blank; no persistence |
 
-Request connection là object phẳng: `provider`, `host`, `port`, `instanceName`, `authenticationType` (`windows` hoặc `sqlserver`), `username`, `password`, `database`, `encrypt`, `trustServerCertificate`, `connectionTimeout`, `commandTimeout`, `applicationName`, `name` (tùy chọn).
+Responses expose metadata, HasPassword and timestamps, never Password, EncryptedPassword or secret references. Errors contain safe messages, not SQL exception objects.
 
-Connection response: `{ id, configuration, hasPassword, createdAtUtc, updatedAtUtc }`. `configuration` không chứa credential. Test response: `{ success, serverName, databaseEngine, version, message }`. Discover response: `{ success, server: { name, provider, version }, databases: [{ name, status, sizeMb, createdAt, isAccessible }] }`.
+## Password and backup
 
-Errors: `{ success: false, message, errorCode, errors? }`; validation 400, not found 404, connection in use 409, connection/discovery failure 422. JSON sai không trả stack trace. Không thêm authentication/authorization trong task này.
+SecretVault encrypts with AES-GCM, random 12-byte nonce and 16-byte tag. Base64 ciphertext lives directly in DatabaseConnections.EncryptedPassword. BackupManager__MasterKey must contain at least 32 characters and remain stable across restarts; preserve the key separately from the database. The README configuration remains required: an empty key cannot persist SQL credentials.
 
-Metadata lấy từ `sys.databases`, `sys.master_files`, `HAS_DBACCESS`. Loại database_id 1–4. Size không thấy được trả null; UI hiển thị “—”. `createdAt` là ngày tạo theo server, không phải ngày cập nhật. Visibility phụ thuộc quyền login.
+BackupPipeline reads one connection snapshot and decrypts internally, passing the password to sqlcmd via SQLCMDPASSWORD environment. Jobs/browser never receive it. sqlcmd -x disables variable substitution. New jobs require sqlcmd ODBC supporting -N[s|m|o] to honor Encrypt. Existing backup/verify/ZIP/hash/SCP/retention/Telegram stages remain.
 
-## Frontend
+## UI and ports
 
-### Files tạo mới
+Cấu hình -> Kết nối Database includes list, Add, Test, Edit, Delete. A shared modal requires connection name and offers Test / Cancel / Save & Connect. Save persists independently of Save Job; edits use PUT with an initially blank password. Create Job loads GET connections, discovers by saved ID and submits ConnectionId + database names. Failed discovery keeps saved metadata visible for retry/configuration. Requests from old selections cannot overwrite current notices.
 
-- `frontend/src/components/modal.tsx`: native dialog, focus trap/Escape và scroll lock.
-- `frontend/src/components/notification.tsx`: notification success/error/info dùng chung.
-- `frontend/src/features/jobs/form-elements.tsx`: field và numbered card.
-- `frontend/src/features/jobs/basic-information-card.tsx`.
-- `frontend/src/features/jobs/database-connection-card.tsx`.
-- `frontend/src/features/jobs/database-connection-modal.tsx`.
-- `frontend/src/features/jobs/database-selector.tsx`.
-- `frontend/src/features/jobs/backup-job-summary.tsx` (kèm ProcessingPipeline).
-- `frontend/src/lib/database-selection.ts`, `database-selection.test.mjs`, `job-validation.d.mts`.
+Central defaults: SQL Server 1433, PostgreSQL 5432, Oracle 1521. Only SQL Server is currently implemented. Empty/legacy ports normalize on both frontend/backend; custom ports remain unchanged. Named-instance discovery is explicitly selected without a TCP port. TCP takes priority when a port exists. Database and InstanceName are independent fields.
 
-### Files sửa
+## Verification
 
-- `frontend/src/features/jobs/job-form.tsx`: orchestrate flow, reset danh sách/selection khi connect lại, Cancel edit giữ active connection, retry ID ổn định, xóa password khỏi state sau persist.
-- `frontend/src/lib/api/client.ts`: reuse `/api/v1` client, typed errors, AbortSignal và test/discover/save connection.
-- `frontend/src/types/api.ts`: contract khớp backend.
-- `frontend/src/lib/job-validation.mjs`, `job-validation.test.mjs`: name/path/retention/connection/database.
-- `frontend/src/app/page.tsx`: back action, save notification, responsive container.
-- `frontend/src/components/sidebar.tsx`: navigation responsive.
-- `frontend/src/features/dashboard/dashboard.tsx`: hỗ trợ job chỉ có ConnectionId.
-- `frontend/src/app/globals.css`: inputs/buttons/dialog và fullscreen mobile.
-- `frontend/src/app/layout.tsx`: `suppressHydrationWarning` chỉ ở body để dung nạp thuộc tính extension ColorZilla `cz-shortcut-listen`. Không tắt kiểm tra hydration ở descendants. Xem [React guidance](https://react.dev/reference/react-dom/client/hydrateRoot#suppressing-unavoidable-hydration-mismatch-errors).
+- Frontend production build and backend Release build succeeded.
+- Backend: 72 assertions covering EF migration, ciphertext and blank-password edits, populated legacy import, concurrency/version checks, FK enforcement and actual HTTP POST -> stop/dispose host -> new host -> GET same ID -> saved-ID test/discover -> create job -> delete conflict.
+- HTTP persistence tests use a deterministic provider only in the test assembly; they do not prove connectivity to the user's SQL Server.
+- Browser: manager, required name, default 1433, custom 1500 restored after toggling discovery, Save & Connect footer.
+- Live Windows Authentication to 192.168.1.138:1433 failed. No production credentials or configured MasterKey were available. Full live SQL + frontend-restart verification still requires those inputs; no live success is claimed.
 
-Không lưu password vào localStorage/sessionStorage. Test kết nối không có nghĩa tạo session SQL giữ mở: mỗi request mở/dispose connection; status UI phản ánh lần discover gần nhất và save kiểm tra lại.
-
-## Build và test
+Commands:
 
 ```powershell
-dotnet build .\backend\BackupManager.slnx -c Release
-dotnet run --project .\backend\tests\BackupManager.ContractTests -c Release
+dotnet build backend/BackupManager.slnx -c Release
+dotnet run --project backend/tests/BackupManager.ContractTests -c Release
 cd frontend
-node --test src/lib/*.test.mjs
-node node_modules/next/dist/bin/next build
+npm test
+npm run build
 ```
 
-Trong môi trường kiểm tra, npm launcher trỏ tới npm-cli.js không tồn tại nên đã dùng Node chạy trực tiếp cùng Next CLI và Node test runner. Cần Node 22.18+ hoặc Node 24 để chạy test import TypeScript; phiên kiểm tra dùng Node 24.19.0.
+Migration development from backend: dotnet tool restore, then dotnet tool run dotnet-ef migrations add <Name> --project src/BackupManager.Infrastructure --output-dir Persistence/Migrations.
 
-Đã kiểm tra:
-
-- Backend Release build: 0 warning, 0 error.
-- Frontend production build và TypeScript pass.
-- 39 backend assertions: DataSource, validation, SqlConnectionStringBuilder escaping, vault encryption, update password, test/discover không lưu, save failure không lưu, legacy jobs, online/access recheck, concurrency, referenced-delete protection, retry ID, sqlcmd arguments.
-- 6 frontend tests: validation, search, size units và selectable states.
-- 8 HTTP checks với API thật ở cổng 5089: validation/not-found/malformed JSON, unreachable SQL test/discover/save, new-inline rejection và không persist khi fail. Lệnh: `./scripts/test-connection-api.ps1` (PowerShell 7).
-- Browser production: create page, validation, summary, modal, loading/disable và lỗi kết nối SqlClient thật qua proxy.
-- Browser desktop và mobile 390×844: layout/scroll/fullscreen dialog, authentication fields. Không thấy hydration mismatch trong browser kiểm tra; browser này không có ColorZilla để tái hiện chính xác extension của người dùng.
-
-Provider thay thế chỉ có trong test project để kiểm tra use case/persistence thành công. Implementation API luôn đăng ký SqlServerDatabaseProvider thật.
-
-Chưa xác minh successful end-to-end với SQL Server đang chạy hoặc backup thật: chưa có endpoint/credential test do người dùng cung cấp và không có sqlcmd trong PATH. Không chạy BACKUP/retention/SCP/Telegram vào hệ thống người dùng trong phiên này.
-
-## Configuration và migration
-
-1. Restart backend đang chạy tại 5088 để nạp assembly/API mới. Phiên kiểm tra dùng API riêng 5089, không thay process API cũ.
-2. SQL Authentication persistence cần `BackupManager__MasterKey` ít nhất 32 ký tự. Giữ nguyên key khi nâng cấp; sao lưu key cùng cơ chế an toàn của deployment. Key thay đổi sẽ không giải mã được secrets cũ.
-3. Backend service phải đọc/ghi được `data/`. `connections.json` tự tạo khi lưu lần đầu. AES-GCM ciphertext vẫn ở `secrets.json`; jobs.json chỉ chứa ConnectionId với job mới. Không cần SQL/EF migration.
-4. Job cũ có inline SqlServer vẫn chạy; cập nhật không thay server/database vẫn được hỗ trợ. Khi tạo job mới hoặc đổi server/database của job cũ, dùng connection mới. Không tự migrate/xóa dữ liệu cũ.
-5. Windows Authentication dùng backend service identity. Linux/Docker bị từ chối rõ ràng và cần SQL Server Authentication; không tự giả định Kerberos đã được cấu hình.
-6. Có Port: DataSource `tcp:host,port`, không dùng InstanceName. Không Port: `host\instance` hoặc `host`. Named instance có thể cần SQL Browser/network rules.
-7. Backup job mới yêu cầu **sqlcmd ODBC có `-N[s|m|o]` trong `sqlcmd -?`** để truyền đúng Encrypt=true/false. Engine preflight và trả lỗi rõ nếu thiếu/không tương thích. Legacy jobs giữ flag behavior cũ. Xem [Microsoft sqlcmd options](https://learn.microsoft.com/en-us/sql/tools/sqlcmd/sqlcmd-utility).
-8. CommandTimeout mặc định 30 giây áp dụng metadata và sqlcmd của job mới; tăng phù hợp trong Advanced (tối đa 600 giây). ApplicationName áp dụng SqlClient test/discovery; sqlcmd dùng tên ứng dụng riêng của utility.
-9. BackupDirectory phải cùng được backend và SQL Server truy cập; backend tạo thư mục khi chạy backup. Remote SQL Server cần shared/mounted storage phù hợp.
-10. UI mới giữ SCP/Telegram tắt mặc định, như form cũ; pipeline vẫn thực thi hai bước với job có cấu hình enabled. Summary ghi rõ điều này.
-11. Connection đã được job dùng không được đổi host/port/instance/provider tại chỗ; tạo connection mới để tránh redirect backup job. Credentials/TLS/timeouts vẫn cập nhật được. Secret phiên bản cũ được giữ để backup đang chạy không mất credential; chưa có secret garbage collection.
-
-## Manual success flow
-
-Mở Tạo Backup Job → điền tên/path/retention → cấu hình server thật → test → connect → thấy user databases → chọn ONLINE/access=true → lưu → kiểm tra job có ConnectionId, không có credential → chạy job khi đường dẫn, quyền BACKUP/VERIFY và sqlcmd đã sẵn sàng. Thử Cancel edit, đổi server thất bại, database không ONLINE, và retry sau save failure.
+Runtime *.db, *.db-shm, *.db-wal and API data/ remain ignored. Runtime database files are not source artifacts.

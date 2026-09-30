@@ -1,3 +1,5 @@
+using BackupManager.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 using BackupManager.Domain.Models;
 using BackupManager.Infrastructure.Services;
 using BackupManager.API.Services;
@@ -8,12 +10,19 @@ using BackupManager.Application.Connections;
 using BackupManager.API.Endpoints;
 
 var builder = WebApplication.CreateBuilder(args);
+// Validate before migration, legacy import, or opening the HTTP listener.
+var secretVault = new SecretVault(builder.Environment, builder.Configuration);
 builder.Host.UseWindowsService();
 builder.Services.AddSingleton<JsonStore>();
-builder.Services.AddSingleton<SecretVault>();
+builder.Services.AddSingleton(secretVault);
 builder.Services.AddSingleton<ProcessRunner>();
 builder.Services.AddSingleton<SqlServerPlugin>();
-builder.Services.AddSingleton<IConfigurationStore>(sp => sp.GetRequiredService<JsonStore>());
+var metadataDirectory = Path.Combine(builder.Environment.ContentRootPath, "data");
+Directory.CreateDirectory(metadataDirectory);
+builder.Services.AddDbContextFactory<MetadataDbContext>(options => options.UseSqlite(
+    new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = Path.Combine(metadataDirectory, "backupmanager.db"), ForeignKeys = true }.ToString()));
+builder.Services.AddSingleton<SqliteConfigurationStore>();
+builder.Services.AddSingleton<IConfigurationStore>(sp => sp.GetRequiredService<SqliteConfigurationStore>());
 builder.Services.AddSingleton<ISecretVault>(sp => sp.GetRequiredService<SecretVault>());
 builder.Services.AddSingleton<IDatabaseProvider, SqlServerDatabaseProvider>();
 builder.Services.AddSingleton<IDatabaseProviderResolver, DatabaseProviderResolver>();
@@ -29,6 +38,8 @@ builder.Services.AddCors(options => options.AddDefaultPolicy(policy => policy
     .AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
 
 var app = builder.Build();
+await app.Services.GetRequiredService<SqliteConfigurationStore>().InitializeAsync(
+    app.Services.GetRequiredService<JsonStore>(), app.Services.GetRequiredService<ISecretVault>());
 app.Use(async (context, next) =>
 {
     try { await next(context); }
@@ -42,13 +53,13 @@ app.UseCors();
 var api = app.MapGroup("/api/v1").AddEndpointFilter<ConfigurationErrorFilter>();
 api.MapDatabaseConnections();
 api.MapGet("/health", () => Results.Ok(new { status = "healthy", version = "0.2.0" }));
-api.MapGet("/jobs", async (JsonStore store) => Results.Ok(await store.GetJobsAsync()));
+api.MapGet("/jobs", async (IConfigurationStore store) => Results.Ok(await store.GetJobsAsync()));
 api.MapPost("/jobs", async (BackupJob job, BackupJobService service, CancellationToken ct) => Results.Ok(await service.SaveAsync(job, ct)));
 api.MapPost("/secrets", async (SecretInput input, SecretVault vault) => { await vault.StoreAsync(input.Name, input.Value); return Results.NoContent(); });
 api.MapPost("/connections/sql-server/databases", async (SqlServerOptions options, SqlServerPlugin plugin, CancellationToken ct) => Results.Ok(await plugin.DiscoverAsync(options, ct)));
 api.MapGet("/runs", async (JsonStore store) => Results.Ok(await store.GetRunsAsync()));
 api.MapGet("/runs/{id:guid}", async (Guid id, JsonStore store) => (await store.GetRunsAsync()).FirstOrDefault(x => x.Id == id) is { } run ? Results.Ok(run) : Results.NotFound());
-api.MapPost("/jobs/{id:guid}/run", async (Guid id, JsonStore store, RunCoordinator coordinator) =>
+api.MapPost("/jobs/{id:guid}/run", async (Guid id, IConfigurationStore store, RunCoordinator coordinator) =>
 {
     var job = (await store.GetJobsAsync()).FirstOrDefault(x => x.Id == id);
     if (job is null) return Results.NotFound();

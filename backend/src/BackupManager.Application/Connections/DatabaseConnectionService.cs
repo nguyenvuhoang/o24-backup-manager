@@ -7,11 +7,13 @@ public sealed class DatabaseConnectionService(IConfigurationStore store, ISecret
     private readonly SemaphoreSlim _mutationGate = new(1, 1);
     public Task<DatabaseConnectionTestResult> TestAsync(DatabaseConnectionOptions options, CancellationToken ct)
     {
+        options = options.Normalize();
         ConnectionValidation.Validate(options);
         return resolver.Resolve(options.Provider).TestConnectionAsync(options, ct);
     }
     public Task<DatabaseDiscoveryResult> DiscoverAsync(DatabaseConnectionOptions options, CancellationToken ct)
     {
+        options = options.Normalize();
         ConnectionValidation.Validate(options);
         return resolver.Resolve(options.Provider).DiscoverDatabasesAsync(options, ct);
     }
@@ -21,7 +23,13 @@ public sealed class DatabaseConnectionService(IConfigurationStore store, ISecret
     public async Task<DatabaseConnectionOptions> ResolveOptionsAsync(Guid id)
     {
         var connection = await GetAsync(id);
-        return DatabaseConnectionOptions.From(connection.Settings, await vault.ResolveAsync(connection.PasswordSecret));
+        return DatabaseConnectionOptions.From(connection.Settings, vault.DecryptPassword(connection.EncryptedPassword));
+    }
+    public async Task<DatabaseConnectionOptions> ResolveEditOptionsAsync(Guid id, DatabaseConnectionOptions input)
+    {
+        var previous = await GetAsync(id);
+        return input.AuthenticationType == "sqlserver" && string.IsNullOrEmpty(input.Password)
+            ? input with { Password = vault.DecryptPassword(previous.EncryptedPassword) } : input;
     }
     public async Task<DatabaseConnectionView> SaveAsync(Guid? id, DatabaseConnectionOptions input, CancellationToken ct)
     {
@@ -29,22 +37,25 @@ public sealed class DatabaseConnectionService(IConfigurationStore store, ISecret
         try
         {
             var previous = id.HasValue ? await GetAsync(id.Value) : null;
-            var options = input;
+            var options = input.Normalize();
+            if (string.IsNullOrWhiteSpace(options.Name))
+                throw new ConfigurationException("VALIDATION_FAILED", "Tên kết nối là bắt buộc.", new() { ["name"] = ["Nhập tên kết nối."] });
             if (options.AuthenticationType == "sqlserver" && string.IsNullOrEmpty(options.Password) && previous is not null)
-                options = options with { Password = await vault.ResolveAsync(previous.PasswordSecret) };
+                options = options with { Password = vault.DecryptPassword(previous.EncryptedPassword) };
             // Persistence is never a way around discovery/connection validation.
+            await TestAsync(options, ct);
             await DiscoverAsync(options, ct);
             var connectionId = previous?.Id ?? Guid.NewGuid();
-            var secret = options.AuthenticationType == "sqlserver" ? $"database-{connectionId:N}-{Guid.NewGuid():N}" : null;
-            if (secret is not null) await vault.StoreAsync(secret, options.Password!);
+            var cipher = options.AuthenticationType != "sqlserver" ? null
+                : previous is not null && string.IsNullOrEmpty(input.Password) ? previous.EncryptedPassword
+                : vault.EncryptPassword(options.Password!);
             var connection = new DatabaseConnection
             {
-                Id = connectionId, Settings = options.ToSettings(), PasswordSecret = secret,
+                Id = connectionId, Settings = options.ToSettings(), EncryptedPassword = cipher,
                 CreatedAtUtc = previous?.CreatedAtUtc ?? DateTimeOffset.UtcNow, UpdatedAtUtc = DateTimeOffset.UtcNow
             };
             ct.ThrowIfCancellationRequested();
             await store.SaveConnectionAsync(connection);
-            // Old secrets are retained for in-flight backups; no credential is returned to the client.
             return DatabaseConnectionView.From(connection);
         }
         finally { _mutationGate.Release(); }

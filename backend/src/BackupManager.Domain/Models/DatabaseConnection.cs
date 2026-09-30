@@ -7,6 +7,7 @@ public record DatabaseConnectionSettings
     public string Host { get; init; } = "";
     public int? Port { get; init; }
     public string? InstanceName { get; init; }
+    public bool UseNamedInstanceDiscovery { get; init; }
     public string AuthenticationType { get; init; } = "windows";
     public string? Username { get; init; }
     public string? Database { get; init; }
@@ -22,6 +23,8 @@ public sealed record DatabaseConnection
     public Guid Id { get; init; } = Guid.NewGuid();
     public DatabaseConnectionSettings Settings { get; init; } = new();
     public string? PasswordSecret { get; init; }
+    public string? EncryptedPassword { get; init; }
+    public override string ToString() => "DatabaseConnection [credentials redacted]";
     public DateTimeOffset CreatedAtUtc { get; init; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAtUtc { get; init; } = DateTimeOffset.UtcNow;
 }

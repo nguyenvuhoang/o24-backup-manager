@@ -1,4 +1,5 @@
 import type { BackupJob, BackupRun, CreateBackupJobRequest, DatabaseConnectionForm, DatabaseDiscoveryResult, DatabaseTestResult, DiscoveryResult, SavedDatabaseConnection, SqlServerOptions } from '@/types/api';
+import { normalizeConnectionPort } from '@/lib/database-providers';
 
 export class ApiError extends Error {
   constructor(message: string, public code?: string, public errors?: Record<string, string[]>) { super(message); }
@@ -16,9 +17,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   jobs: () => request<BackupJob[]>('/jobs'),
   saveJob: (job: BackupJob | CreateBackupJobRequest) => request<BackupJob>('/jobs', { method: 'POST', body: JSON.stringify(job) }),
-  testConnection: (form: DatabaseConnectionForm, signal?: AbortSignal) => request<DatabaseTestResult>('/database-connections/test', { method: 'POST', body: JSON.stringify(form), signal }),
-  discoverDatabases: (form: DatabaseConnectionForm, signal?: AbortSignal) => request<DatabaseDiscoveryResult>('/database-connections/discover', { method: 'POST', body: JSON.stringify(form), signal }),
-  saveConnection: (form: DatabaseConnectionForm) => request<SavedDatabaseConnection>('/database-connections', { method: 'POST', body: JSON.stringify(form) }),
+  testConnection: (form: DatabaseConnectionForm, signal?: AbortSignal) => request<DatabaseTestResult>('/database-connections/test', { method: 'POST', body: JSON.stringify(normalizeConnectionPort(form)), signal }),
+  discoverDatabases: (form: DatabaseConnectionForm, signal?: AbortSignal) => request<DatabaseDiscoveryResult>('/database-connections/discover', { method: 'POST', body: JSON.stringify(normalizeConnectionPort(form)), signal }),
+  saveConnection: (form: DatabaseConnectionForm, id?: string) => request<SavedDatabaseConnection>(id ? `/database-connections/${id}` : '/database-connections', { method: id ? 'PUT' : 'POST', body: JSON.stringify(normalizeConnectionPort(form)) }),
+  deleteConnection: (id: string) => request<void>(`/database-connections/${id}`, { method: 'DELETE' }),
+  testSavedConnection: (id: string, signal?: AbortSignal) => request<DatabaseTestResult>(`/database-connections/${id}/test`, { method: 'POST', signal }),
+  discoverSavedConnection: (id: string, signal?: AbortSignal) => request<DatabaseDiscoveryResult>(`/database-connections/${id}/discover`, { method: 'POST', signal }),
+  testConnectionEdit: (id: string, form: DatabaseConnectionForm, signal?: AbortSignal) => request<DatabaseTestResult>(`/database-connections/${id}/test-options`, { method: 'POST', body: JSON.stringify(normalizeConnectionPort(form)), signal }),
   connections: () => request<SavedDatabaseConnection[]>('/database-connections'),
   discover: (options: SqlServerOptions) => request<DiscoveryResult>('/connections/sql-server/databases', { method: 'POST', body: JSON.stringify(options) }),
   runs: () => request<BackupRun[]>('/runs'),

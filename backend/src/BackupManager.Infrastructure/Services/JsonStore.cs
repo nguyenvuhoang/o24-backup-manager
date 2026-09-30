@@ -23,7 +23,10 @@ public sealed class JsonStore(IHostEnvironment environment) : IConfigurationStor
         {
             var previous = items[index].Settings;
             var current = connection.Settings;
-            var targetChanged = previous.Provider != current.Provider || previous.Host != current.Host || previous.Port != current.Port || previous.InstanceName != current.InstanceName;
+            var previousPort = DatabaseProviders.ResolvePort(previous);
+            var currentPort = DatabaseProviders.ResolvePort(current);
+            var targetChanged = previous.Provider != current.Provider || previous.Host != current.Host || previousPort != currentPort
+                || (previousPort is null && previous.InstanceName != current.InstanceName);
             if (targetChanged && (await ReadCoreAsync<BackupJob>(JobsPath)).Any(j => j.ConnectionId == connection.Id))
                 throw new ConfigurationException("CONNECTION_IN_USE", "Không đổi server của kết nối đang được job sử dụng. Hãy tạo kết nối mới.");
         }
