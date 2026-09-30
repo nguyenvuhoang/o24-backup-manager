@@ -1,0 +1,5 @@
+'use client';
+import { Logo } from './logo';
+const items = [['overview', 'Tổng quan'], ['create', 'Tạo backup job'], ['history', 'Lịch sử'], ['settings', 'Cấu hình']];
+export function Sidebar({ view, setView }: { view: string; setView: (v: string) => void }) { return <aside className="flex w-full shrink-0 flex-col md:min-h-screen md:w-56 xl:w-64 bg-[#101b35] p-6 text-white"><div className="mb-4 md:mb-10"><Logo /><div className="mt-1 text-xs text-slate-400">O24 Backup Database</div></div><nav className="flex flex-wrap gap-1 md:block md:space-y-2">{items.map(([id, label]) => <button key={id} onClick={() => setView(id)} className={`rounded-lg md:w-full px-4 py-3 text-left text-sm transition ${view === id ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-white/10'}`}>{label}</button>)}</nav><div className="mt-auto hidden rounded-xl md:block border border-white/10 p-3 text-xs text-slate-400"><span className="mr-2 inline-block h-2 w-2 rounded-full bg-emerald-400" />Local agent</div></aside> }
+

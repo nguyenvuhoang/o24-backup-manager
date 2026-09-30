@@ -1,0 +1,30 @@
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: backend/src/BackupManager.API/Dockerfile
+    container_name: backup-manager-backend
+    restart: unless-stopped
+    expose: ["5088"]
+    environment:
+      BackupManager__MasterKey: ${BACKUP_MANAGER_MASTER_KEY:?Set BACKUP_MANAGER_MASTER_KEY}
+      FrontendOrigin: http://localhost:3000
+    volumes:
+      - backup-manager-data:/app/data
+      - ${BACKUP_HOST_PATH:-./backups}:/backups
+      - ${SSH_HOST_PATH:-./ssh}:/app/ssh:ro
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+      args:
+        BACKEND_URL: http://backend:5088
+    container_name: backup-manager-frontend
+    restart: unless-stopped
+    depends_on: [backend]
+    ports:
+      - "127.0.0.1:3000:3000"
+
+volumes:
+  backup-manager-data:

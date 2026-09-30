@@ -1,0 +1,22 @@
+@import "tailwindcss";
+@theme inline {
+  --font-sans: var(--font-quicksand);
+}
+@layer base {
+  body { font-weight: 400; }
+  h1 { font-weight: 700; }
+  h2, h3, button, label, summary, th { font-weight: 600; }
+  input, select, textarea, table { font-weight: 500; }
+  button, input, select, textarea { font-family: inherit; }
+}
+:root{--ink:#172033;--muted:#667085;--line:#e5eaf1;--surface:#fff;--brand:#2563eb}*{box-sizing:border-box}body{margin:0;background:#f5f7fb;color:var(--ink);font-family:var(--font-quicksand),sans-serif}.panel{background:var(--surface);border:1px solid var(--line);border-radius:16px;box-shadow:0 8px 32px rgba(31,42,68,.05)}
+.job-input{display:block;width:100%;min-width:0;border:1px solid #cbd5e1;border-radius:8px;background:#fff;padding:10px 12px;font-size:14px;font-weight:500;color:#172033;outline:none}
+.job-input:focus{border-color:#3b82f6;box-shadow:0 0 0 3px #dbeafe}.job-input[aria-invalid=true]{border-color:#ef4444}
+.job-button,.job-primary{border-radius:8px;padding:10px 16px;font-size:14px;font-weight:600;cursor:pointer}
+.job-button{border:1px solid #cbd5e1;background:#fff}.job-button:hover{background:#f8fafc}
+.job-primary{border:1px solid #2563eb;background:#2563eb;color:#fff}.job-primary:hover{background:#1d4ed8}
+button:disabled,fieldset:disabled{opacity:.6}button:disabled{cursor:not-allowed}input[type=checkbox]{accent-color:#2563eb;width:16px;height:16px}
+button:focus-visible,summary:focus-visible{outline:2px solid #2563eb;outline-offset:3px}
+.connection-dialog{margin:auto;width:min(640px,calc(100vw - 32px));max-height:calc(100dvh - 40px);padding:0;border:1px solid #e2e8f0;border-radius:16px;background:white;color:#172033;box-shadow:0 24px 80px #0f172a33;overflow-y:auto}
+.connection-dialog::backdrop{background:#0f172a80;backdrop-filter:blur(2px)}
+@media(max-width:640px){.connection-dialog{width:100%;max-width:100vw;height:100dvh;max-height:100dvh;margin:0;border-radius:0}}
