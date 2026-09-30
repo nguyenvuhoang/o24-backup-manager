@@ -1,0 +1,211 @@
+using System.Collections.Concurrent;
+using System.Globalization;
+using BackupManager.Application.Connections;
+using BackupManager.Domain.Models;
+
+namespace BackupManager.API.Services;
+
+public sealed class BackupSchedulerService(
+    IConfigurationStore store,
+    RunCoordinator coordinator,
+    ILogger<BackupSchedulerService> logger
+) : BackgroundService
+{
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(20);
+
+    private readonly ConcurrentDictionary<Guid, string> _lastTriggeredScheduleKeys = new();
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        logger.LogInformation("Backup scheduler started.");
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                await CheckSchedulesAsync(stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Backup scheduler check failed.");
+            }
+
+            try
+            {
+                await Task.Delay(PollInterval, stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+        }
+
+        logger.LogInformation("Backup scheduler stopped.");
+    }
+
+    private async Task CheckSchedulesAsync(CancellationToken ct)
+    {
+        var jobs = await store.GetJobsAsync();
+
+        foreach (var job in jobs)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            if (!job.Enabled)
+                continue;
+
+            if (job.Schedule?.Enabled != true)
+                continue;
+
+            if (!TryParseScheduleTime(job.Schedule.Time, out var scheduleTime))
+            {
+                logger.LogWarning(
+                    "Job {JobId} ({JobName}) has invalid schedule time '{ScheduleTime}'. Expected HH:mm.",
+                    job.Id,
+                    job.Name,
+                    job.Schedule.Time
+                );
+
+                continue;
+            }
+
+            TimeZoneInfo timeZone;
+
+            try
+            {
+                timeZone = ResolveTimeZone(job.Schedule.TimeZone);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(
+                    ex,
+                    "Job {JobId} ({JobName}) has invalid timezone '{TimeZone}'.",
+                    job.Id,
+                    job.Name,
+                    job.Schedule.TimeZone
+                );
+
+                continue;
+            }
+
+            var nowUtc = DateTimeOffset.UtcNow;
+
+            var localNow = TimeZoneInfo.ConvertTime(nowUtc, timeZone);
+
+            if (localNow.Hour != scheduleTime.Hour || localNow.Minute != scheduleTime.Minute)
+            {
+                continue;
+            }
+
+            //
+            // Key prevents the 20-second poll from starting the
+            // same daily schedule multiple times within one minute.
+            //
+            var scheduleKey = $"{localNow:yyyy-MM-dd}|{scheduleTime:hh\\:mm}|{timeZone.Id}";
+
+            if (
+                _lastTriggeredScheduleKeys.TryGetValue(job.Id, out var previousKey)
+                && string.Equals(previousKey, scheduleKey, StringComparison.Ordinal)
+            )
+            {
+                continue;
+            }
+
+            //
+            // Mark this occurrence before TryStart.
+            // If the job is already running at 03:00,
+            // this scheduled occurrence is skipped instead of
+            // being repeatedly retried during the same minute.
+            //
+            _lastTriggeredScheduleKeys[job.Id] = scheduleKey;
+
+            if (coordinator.IsRunning(job.Id))
+            {
+                logger.LogWarning(
+                    "Scheduled backup skipped because job is already running. Job {JobId} ({JobName}), local time {LocalTime}.",
+                    job.Id,
+                    job.Name,
+                    localNow
+                );
+
+                continue;
+            }
+
+            var started = coordinator.TryStart(job);
+
+            if (started)
+            {
+                logger.LogInformation(
+                    "Scheduled backup started. Job {JobId} ({JobName}) at {LocalTime} ({TimeZone}).",
+                    job.Id,
+                    job.Name,
+                    localNow,
+                    timeZone.Id
+                );
+            }
+            else
+            {
+                logger.LogWarning(
+                    "Scheduled backup could not start because the coordinator rejected it. Job {JobId} ({JobName}).",
+                    job.Id,
+                    job.Name
+                );
+            }
+        }
+
+        CleanupOldKeys(jobs);
+    }
+
+    private void CleanupOldKeys(IReadOnlyCollection<BackupJob> jobs)
+    {
+        var activeJobIds = jobs.Select(x => x.Id).ToHashSet();
+
+        foreach (var jobId in _lastTriggeredScheduleKeys.Keys)
+        {
+            if (!activeJobIds.Contains(jobId))
+            {
+                _lastTriggeredScheduleKeys.TryRemove(jobId, out _);
+            }
+        }
+    }
+
+    private static bool TryParseScheduleTime(string? value, out TimeOnly time)
+    {
+        return TimeOnly.TryParseExact(
+            value?.Trim(),
+            "HH:mm",
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.None,
+            out time
+        );
+    }
+
+    private static TimeZoneInfo ResolveTimeZone(string? timeZoneId)
+    {
+        var requested = string.IsNullOrWhiteSpace(timeZoneId)
+            ? "Asia/Vientiane"
+            : timeZoneId.Trim();
+
+        try
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById(requested);
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            //
+            // Explicit fallback for older Windows installations
+            // that do not resolve IANA timezone IDs.
+            //
+            if (string.Equals(requested, "Asia/Vientiane", StringComparison.OrdinalIgnoreCase))
+            {
+                return TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time");
+            }
+
+            throw;
+        }
+    }
+}

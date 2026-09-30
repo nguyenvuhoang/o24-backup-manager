@@ -1,9 +1,149 @@
 import type { DatabaseProvider } from '@/lib/database-providers';
-export type RunStatus = 'Queued' | 'Running' | 'Succeeded' | 'Failed' | 'Cancelled';
-export interface SqlServerOptions { server: string; integratedSecurity: boolean; username?: string; passwordSecret?: string }
-export interface BackupJob { id?: string; name: string; enabled: boolean; connectionId?: string; sqlServer?: SqlServerOptions | null; databases: string[]; backupDirectory: string; retentionDays: number; sftp?: { enabled: boolean; host: string; port: number; username: string; remotePath: string; identityFile?: string }; telegram?: { enabled: boolean; chatId: string; botTokenSecret: string; prefix: string } }
-export interface BackupRun { id: string; jobId: string; jobName: string; status: RunStatus; createdAt: string; startedAt?: string; finishedAt?: string; error?: string; artifacts: { path: string; size: number; sha256: string }[]; stages: { name: string; status: RunStatus; message: string }[] }
-export interface DiscoveryResult { success: boolean; message: string; items?: string[] }
+
+export type RunStatus =
+  | 'Queued'
+  | 'Running'
+  | 'Succeeded'
+  | 'Failed'
+  | 'Cancelled';
+
+export type BackupStage =
+  | 'Queued'
+  | 'Connecting'
+  | 'BackingUp'
+  | 'Verifying'
+  | 'Compressing'
+  | 'Transferring'
+  | 'RetentionCleanup'
+  | 'Notifying'
+  | 'Completed'
+  | 'Failed';
+
+export type RunLogLevel =
+  | 'Information'
+  | 'Warning'
+  | 'Error';
+
+export interface SqlServerOptions {
+  server: string;
+  integratedSecurity: boolean;
+  username?: string;
+  passwordSecret?: string;
+}
+
+export interface BackupJob {
+  id?: string;
+  name: string;
+  enabled: boolean;
+  connectionId?: string;
+  sqlServer?: SqlServerOptions | null;
+  databases: string[];
+
+  /**
+   * SQL Server-side staging directory.
+   * Example:
+   * /var/opt/mssql/backup/backup-manager
+   */
+  sqlServerBackupDirectory?: string;
+
+  /**
+   * Final/archive destination configured for the job.
+   */
+  backupDirectory: string;
+
+  retentionDays: number;
+
+  sftp?: {
+    enabled: boolean;
+    host: string;
+    port: number;
+    username: string;
+    remotePath: string;
+    identityFile?: string;
+  };
+
+  telegram?: {
+    enabled: boolean;
+    chatId: string;
+    botTokenSecret: string;
+    prefix: string;
+  };
+}
+
+export interface BackupArtifact {
+  path: string;
+  size: number;
+  sha256: string;
+}
+
+export interface RunStage {
+  name: string;
+  status: RunStatus;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  message: string;
+}
+
+export interface DatabaseBackupRun {
+  database: string;
+  status: RunStatus;
+  stage: BackupStage;
+
+  startedAt?: string | null;
+  finishedAt?: string | null;
+
+  backupPath?: string | null;
+  backupSize?: number | null;
+
+  sqlOutput?: string | null;
+  error?: string | null;
+}
+
+export interface RunLog {
+  timestamp: string;
+  level: RunLogLevel;
+  stage: BackupStage;
+  database?: string | null;
+  message: string;
+}
+
+export interface BackupRun {
+  id: string;
+  jobId: string;
+  jobName: string;
+
+  status: RunStatus;
+
+  createdAt: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+
+  currentStage?: BackupStage;
+  currentDatabase?: string | null;
+
+  totalDatabases?: number;
+  completedDatabases?: number;
+  succeededDatabases?: number;
+  failedDatabases?: number;
+
+  sqlServerBackupDirectory?: string | null;
+  sqlServerRunDirectory?: string | null;
+  backupDirectory?: string | null;
+
+  artifacts: BackupArtifact[];
+  stages: RunStage[];
+
+  databases?: DatabaseBackupRun[];
+  logs?: RunLog[];
+
+  error?: string | null;
+}
+
+export interface DiscoveryResult {
+  success: boolean;
+  message: string;
+  items?: string[];
+}
 
 export interface DatabaseConnectionForm {
   name: string;
@@ -22,9 +162,49 @@ export interface DatabaseConnectionForm {
   commandTimeout: number;
   applicationName: string;
 }
-export interface DatabaseServerInfo { name: string; provider: string; version: string }
-export interface DatabaseInfo { name: string; status: string; sizeMb: number | null; createdAt: string | null; isAccessible: boolean }
-export interface DatabaseDiscoveryResult { success: boolean; server: DatabaseServerInfo; databases: DatabaseInfo[] }
-export interface DatabaseTestResult { success: boolean; serverName: string; databaseEngine: string; version: string; message: string }
-export interface SavedDatabaseConnection extends Omit<DatabaseConnectionForm, 'password'> { id: string; hasPassword: boolean; createdAtUtc: string; updatedAtUtc: string }
-export interface CreateBackupJobRequest { id: string; name: string; connectionId: string; databases: string[]; backupDirectory: string; retentionDays: number; enabled: boolean }
+
+export interface DatabaseServerInfo {
+  name: string;
+  provider: string;
+  version: string;
+}
+
+export interface DatabaseInfo {
+  name: string;
+  status: string;
+  sizeMb: number | null;
+  createdAt: string | null;
+  isAccessible: boolean;
+}
+
+export interface DatabaseDiscoveryResult {
+  success: boolean;
+  server: DatabaseServerInfo;
+  databases: DatabaseInfo[];
+}
+
+export interface DatabaseTestResult {
+  success: boolean;
+  serverName: string;
+  databaseEngine: string;
+  version: string;
+  message: string;
+}
+
+export interface SavedDatabaseConnection
+  extends Omit<DatabaseConnectionForm, 'password'> {
+  id: string;
+  hasPassword: boolean;
+  createdAtUtc: string;
+  updatedAtUtc: string;
+}
+
+export interface CreateBackupJobRequest {
+  id: string;
+  name: string;
+  connectionId: string;
+  databases: string[];
+  backupDirectory: string;
+  retentionDays: number;
+  enabled: boolean;
+}
