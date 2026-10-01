@@ -21,9 +21,15 @@ public sealed class SqlServerPlugin(SecretVault vault)
     {
         try
         {
-            await using var connection = await OpenConnectionAsync(options, ct);
+            await using var connection =
+                await OpenConnectionAsync(
+                    options,
+                    ct
+                );
 
-            await using var command = connection.CreateCommand();
+            await using var command =
+                connection.CreateCommand();
+
             command.CommandText = """
                 SET NOCOUNT ON;
 
@@ -34,16 +40,23 @@ public sealed class SqlServerPlugin(SecretVault vault)
                 ORDER BY name;
                 """;
 
-            command.CommandTimeout = ResolveCommandTimeout(options);
+            command.CommandTimeout =
+                ResolveCommandTimeout(options);
 
-            var databases = new List<string>();
+            var databases =
+                new List<string>();
 
-            await using var reader = await command.ExecuteReaderAsync(ct);
+            await using var reader =
+                await command.ExecuteReaderAsync(ct);
 
             while (await reader.ReadAsync(ct))
             {
                 if (!reader.IsDBNull(0))
-                    databases.Add(reader.GetString(0));
+                {
+                    databases.Add(
+                        reader.GetString(0)
+                    );
+                }
             }
 
             return new TestResult(
@@ -69,36 +82,54 @@ public sealed class SqlServerPlugin(SecretVault vault)
         string? resolvedPassword = null)
     {
         if (string.IsNullOrWhiteSpace(database))
+        {
             throw new ArgumentException(
                 "Database name is required.",
                 nameof(database)
             );
+        }
 
         if (string.IsNullOrWhiteSpace(serverDirectory))
+        {
             throw new ArgumentException(
                 "SQL Server backup directory is required.",
                 nameof(serverDirectory)
             );
+        }
 
-        var safeDatabase = SanitizeFileName(database);
+        var safeDatabase =
+            SanitizeFileName(database);
 
-        var directory = NormalizeServerDirectory(serverDirectory);
+        var directory =
+            NormalizeServerDirectory(
+                serverDirectory
+            );
 
         var fileName =
             $"{safeDatabase}_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}.bak";
 
-        var backupPath = CombineServerPath(
-            directory,
-            fileName
-        );
+        var backupPath =
+            CombineServerPath(
+                directory,
+                fileName
+            );
 
         var dbIdentifier =
-            database.Replace("]", "]]", StringComparison.Ordinal);
+            database.Replace(
+                "]",
+                "]]",
+                StringComparison.Ordinal
+            );
 
         var sqlPath =
-            backupPath.Replace("'", "''", StringComparison.Ordinal);
+            backupPath.Replace(
+                "'",
+                "''",
+                StringComparison.Ordinal
+            );
 
-        var output = new StringBuilder();
+        var output =
+            new StringBuilder();
 
         try
         {
@@ -109,24 +140,37 @@ public sealed class SqlServerPlugin(SecretVault vault)
                     resolvedPassword
                 );
 
-            connection.InfoMessage += (_, args) =>
-            {
-                foreach (SqlError error in args.Errors)
+            connection.InfoMessage +=
+                (_, args) =>
                 {
-                    if (output.Length > 0)
-                        output.AppendLine();
+                    foreach (
+                        SqlError error
+                        in args.Errors
+                    )
+                    {
+                        if (output.Length > 0)
+                        {
+                            output.AppendLine();
+                        }
 
-                    output.Append(error.Message);
-                }
-            };
+                        output.Append(
+                            error.Message
+                        );
+                    }
+                };
 
             //
-            // 1. BACKUP
+            // 1. BACKUP DATABASE
             //
-            await using (var command = connection.CreateCommand())
+            await using (
+                var command =
+                    connection.CreateCommand()
+            )
             {
                 command.CommandTimeout =
-                    ResolveCommandTimeout(options);
+                    ResolveCommandTimeout(
+                        options
+                    );
 
                 command.CommandText = $"""
                     BACKUP DATABASE [{dbIdentifier}]
@@ -138,16 +182,23 @@ public sealed class SqlServerPlugin(SecretVault vault)
                         STATS = 5;
                     """;
 
-                await command.ExecuteNonQueryAsync(ct);
+                await command.ExecuteNonQueryAsync(
+                    ct
+                );
             }
 
             //
-            // 2. VERIFY
+            // 2. RESTORE VERIFYONLY
             //
-            await using (var command = connection.CreateCommand())
+            await using (
+                var command =
+                    connection.CreateCommand()
+            )
             {
                 command.CommandTimeout =
-                    ResolveCommandTimeout(options);
+                    ResolveCommandTimeout(
+                        options
+                    );
 
                 command.CommandText = $"""
                     RESTORE VERIFYONLY
@@ -155,18 +206,24 @@ public sealed class SqlServerPlugin(SecretVault vault)
                     WITH CHECKSUM;
                     """;
 
-                await command.ExecuteNonQueryAsync(ct);
+                await command.ExecuteNonQueryAsync(
+                    ct
+                );
             }
 
             //
-            // 3. Ask SQL Server OS whether the file exists.
+            // 3. Verify the physical backup file exists
+            //    on the SQL Server host.
             //
-            long? size = null;
-
-            await using (var command = connection.CreateCommand())
+            await using (
+                var command =
+                    connection.CreateCommand()
+            )
             {
                 command.CommandTimeout =
-                    ResolveCommandTimeout(options);
+                    ResolveCommandTimeout(
+                        options
+                    );
 
                 command.CommandText = """
                     DECLARE @FileExists int;
@@ -193,67 +250,143 @@ public sealed class SqlServerPlugin(SecretVault vault)
 
                 var exists =
                     Convert.ToInt32(
-                        await command.ExecuteScalarAsync(ct)
+                        await command
+                            .ExecuteScalarAsync(ct)
                         ?? 0
                     );
 
                 if (exists != 1)
                 {
                     throw new InvalidOperationException(
-                        $"SQL Server completed BACKUP but the backup file was not found on the SQL Server host: {backupPath}"
+                        "SQL Server completed BACKUP but " +
+                        "the backup file was not found on " +
+                        "the SQL Server host: " +
+                        backupPath
                     );
                 }
             }
 
             //
-            // 4. Obtain physical file size from SQL Server host.
+            // 4. Obtain backup size from SQL Server's
+            //    backup history in msdb.
             //
+            //    compressed_backup_size is the actual
+            //    size written to the backup media when
+            //    backup compression is used.
+            //
+            //    We match both:
+            //      - database name
+            //      - exact physical backup path
+            //
+            //    This avoids relying on OS filesystem
+            //    enumeration and works for Linux SQL
+            //    Server as well as Windows SQL Server.
+            //
+            long? size = null;
+
             try
             {
                 await using var sizeCommand =
                     connection.CreateCommand();
 
                 sizeCommand.CommandTimeout =
-                    ResolveCommandTimeout(options);
+                    ResolveCommandTimeout(
+                        options
+                    );
 
                 sizeCommand.CommandText = """
-                    SELECT size
-                    FROM sys.dm_os_enumerate_filesystem(
-                        @Directory,
-                        @Pattern
-                    )
-                    WHERE is_directory = 0;
+                    SET NOCOUNT ON;
+
+                    SELECT TOP (1)
+                        CAST(
+                            COALESCE(
+                                bs.compressed_backup_size,
+                                bs.backup_size
+                            )
+                            AS bigint
+                        ) AS BackupSize
+                    FROM msdb.dbo.backupset AS bs
+                    INNER JOIN msdb.dbo.backupmediafamily AS bmf
+                        ON bmf.media_set_id = bs.media_set_id
+                    WHERE bs.database_name = @DatabaseName
+                      AND bs.[type] = 'D'
+                      AND bmf.physical_device_name = @BackupPath
+                    ORDER BY
+                        bs.backup_finish_date DESC,
+                        bs.backup_set_id DESC;
                     """;
 
-                sizeCommand.Parameters.AddWithValue(
-                    "@Directory",
-                    directory
+                sizeCommand.Parameters.Add(
+                    new SqlParameter(
+                        "@DatabaseName",
+                        System.Data.SqlDbType.NVarChar,
+                        128
+                    )
+                    {
+                        Value = database
+                    }
                 );
 
-                sizeCommand.Parameters.AddWithValue(
-                    "@Pattern",
-                    fileName
+                sizeCommand.Parameters.Add(
+                    new SqlParameter(
+                        "@BackupPath",
+                        System.Data.SqlDbType.NVarChar,
+                        4000
+                    )
+                    {
+                        Value = backupPath
+                    }
                 );
 
                 var value =
-                    await sizeCommand.ExecuteScalarAsync(ct);
+                    await sizeCommand
+                        .ExecuteScalarAsync(ct);
 
-                if (value is not null &&
-                    value != DBNull.Value)
+                if (
+                    value is not null
+                    && value != DBNull.Value
+                )
                 {
-                    size = Convert.ToInt64(value);
+                    size =
+                        Convert.ToInt64(
+                            value
+                        );
                 }
             }
-            catch
+            catch (SqlException ex)
             {
-                // File size is informational only.
-                // A successful BACKUP + VERIFYONLY is not failed
-                // merely because filesystem enumeration is unavailable.
+                //
+                // Size is informational only.
+                //
+                // BACKUP + VERIFYONLY + physical file
+                // existence have already succeeded.
+                //
+                // Do not fail the entire backup merely
+                // because msdb backup-history metadata
+                // cannot be read.
+                //
+                if (output.Length > 0)
+                {
+                    output.AppendLine();
+                }
+
+                output.Append(
+                    "Warning: unable to read backup size " +
+                    "from msdb backup history. " +
+                    FormatSqlException(ex)
+                );
             }
 
-            var messages = output.ToString().Trim();
+            var messages =
+                output
+                    .ToString()
+                    .Trim();
 
-            if (string.IsNullOrWhiteSpace(messages))
+            if (
+                string.IsNullOrWhiteSpace(
+                    messages
+                )
+            )
             {
                 messages =
                     "BACKUP DATABASE completed successfully. " +
@@ -303,16 +436,20 @@ public sealed class SqlServerPlugin(SecretVault vault)
             );
 
         var connection =
-            new SqlConnection(connectionString);
+            new SqlConnection(
+                connectionString
+            );
 
         try
         {
             await connection.OpenAsync(ct);
+
             return connection;
         }
         catch
         {
             await connection.DisposeAsync();
+
             throw;
         }
     }
@@ -321,32 +458,43 @@ public sealed class SqlServerPlugin(SecretVault vault)
         SqlServerOptions options,
         string? resolvedPassword)
     {
-        var builder = new SqlConnectionStringBuilder
-        {
-            DataSource = options.Server,
-            InitialCatalog =
-                string.IsNullOrWhiteSpace(options.Database)
-                    ? "master"
-                    : options.Database.Trim(),
+        var builder =
+            new SqlConnectionStringBuilder
+            {
+                DataSource =
+                    options.Server,
 
-            IntegratedSecurity =
-                options.IntegratedSecurity,
+                InitialCatalog =
+                    string.IsNullOrWhiteSpace(
+                        options.Database
+                    )
+                        ? "master"
+                        : options.Database.Trim(),
 
-            Encrypt =
-                options.Encrypt ?? true,
+                IntegratedSecurity =
+                    options.IntegratedSecurity,
 
-            TrustServerCertificate =
-                options.TrustServerCertificate ?? false,
+                Encrypt =
+                    options.Encrypt
+                    ?? true,
 
-            ConnectTimeout =
-                options.ConnectionTimeout ?? 15,
+                TrustServerCertificate =
+                    options.TrustServerCertificate
+                    ?? false,
 
-            ApplicationName =
-                "BackupManager",
+                ConnectTimeout =
+                    options.ConnectionTimeout
+                    ?? 15,
 
-            PersistSecurityInfo = false,
-            Pooling = false
-        };
+                ApplicationName =
+                    "BackupManager",
+
+                PersistSecurityInfo =
+                    false,
+
+                Pooling =
+                    false
+            };
 
         if (!options.IntegratedSecurity)
         {
@@ -376,9 +524,12 @@ public sealed class SqlServerPlugin(SecretVault vault)
     private static int ResolveCommandTimeout(
         SqlServerOptions options)
     {
+        //
         // BACKUP can legitimately take a long time.
         // 0 means unlimited in SqlCommand.
-        return options.CommandTimeout ?? 0;
+        //
+        return options.CommandTimeout
+            ?? 0;
     }
 
     private static string NormalizeServerDirectory(
@@ -393,9 +544,13 @@ public sealed class SqlServerPlugin(SecretVault vault)
         string directory,
         string fileName)
     {
+        //
         // Detect Linux/Unix path from configured directory.
+        //
         if (directory.StartsWith('/'))
+        {
             return $"{directory}/{fileName}";
+        }
 
         return $"{directory}\\{fileName}";
     }
@@ -408,9 +563,10 @@ public sealed class SqlServerPlugin(SecretVault vault)
 
         return string.Concat(
             value.Select(
-                ch => invalid.Contains(ch)
-                    ? '_'
-                    : ch
+                ch =>
+                    invalid.Contains(ch)
+                        ? '_'
+                        : ch
             )
         );
     }
@@ -419,19 +575,29 @@ public sealed class SqlServerPlugin(SecretVault vault)
         Exception ex)
     {
         return ex is SqlException sqlException
-            ? FormatSqlException(sqlException)
+            ? FormatSqlException(
+                sqlException
+            )
             : ex.Message;
     }
 
     private static string FormatSqlException(
         SqlException ex)
     {
-        var builder = new StringBuilder();
+        var builder =
+            new StringBuilder();
 
-        foreach (SqlError error in ex.Errors)
+        foreach (
+            SqlError error
+            in ex.Errors
+        )
         {
             if (builder.Length > 0)
-                builder.Append(" | ");
+            {
+                builder.Append(
+                    " | "
+                );
+            }
 
             builder.Append(
                 $"SQL {error.Number}, " +

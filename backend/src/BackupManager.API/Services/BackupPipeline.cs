@@ -14,15 +14,26 @@ public sealed class BackupPipeline(
     RemoteBackupStorageService remoteStorage
 )
 {
-    public async Task<BackupRun> ExecuteAsync(BackupJob job, CancellationToken ct)
+    public async Task<BackupRun> ExecuteAsync(
+        BackupJob job,
+        CancellationToken ct
+    )
     {
-        var sqlServerBackupRoot = string.IsNullOrWhiteSpace(job.SqlServerBackupDirectory)
-            ? "/var/opt/mssql/backup/backup-manager"
-            : job.SqlServerBackupDirectory.Trim();
+        var sqlServerBackupRoot =
+            string.IsNullOrWhiteSpace(
+                job.SqlServerBackupDirectory
+            )
+                ? "/var/opt/mssql/backup/backup-manager"
+                : job.SqlServerBackupDirectory.Trim();
 
-        var runFolderName = $"{Sanitize(job.Name)}_{DateTime.Now:yyyyMMdd_HHmmss}";
+        var runFolderName =
+            $"{Sanitize(job.Name)}_{DateTime.Now:yyyyMMdd_HHmmss}";
 
-        var sqlServerRunDirectory = CombineServerPath(sqlServerBackupRoot, runFolderName);
+        var sqlServerRunDirectory =
+            CombineServerPath(
+                sqlServerBackupRoot,
+                runFolderName
+            );
 
         var run = new BackupRun
         {
@@ -36,19 +47,25 @@ public sealed class BackupPipeline(
 
             TotalDatabases = job.Databases.Length,
 
-            SqlServerBackupDirectory = sqlServerBackupRoot,
+            SqlServerBackupDirectory =
+                sqlServerBackupRoot,
 
-            SqlServerRunDirectory = sqlServerRunDirectory,
+            SqlServerRunDirectory =
+                sqlServerRunDirectory,
 
-            BackupDirectory = job.BackupDirectory,
+            BackupDirectory =
+                job.BackupDirectory,
 
-            Databases = job
-                .Databases.Select(database => new DatabaseBackupRun
-                {
-                    Database = database,
-                    Status = RunStatus.Queued,
-                    Stage = BackupStage.Queued,
-                })
+            Databases = job.Databases
+                .Select(
+                    database =>
+                        new DatabaseBackupRun
+                        {
+                            Database = database,
+                            Status = RunStatus.Queued,
+                            Stage = BackupStage.Queued,
+                        }
+                )
                 .ToList(),
         };
 
@@ -67,19 +84,36 @@ public sealed class BackupPipeline(
             //
             // Resolve saved connection.
             //
-            var savedConnection = job.ConnectionId is Guid connectionId
-                ? await connections.GetAsync(connectionId)
-                : null;
+            var savedConnection =
+                job.ConnectionId is Guid connectionId
+                    ? await connections.GetAsync(
+                        connectionId
+                    )
+                    : null;
 
-            var password = vault.DecryptPassword(savedConnection?.EncryptedPassword);
+            var password =
+                vault.DecryptPassword(
+                    savedConnection?.EncryptedPassword
+                );
 
-            var sqlOptions = savedConnection is not null
-                ? SqlServerConnectionSettings.ForBackup(savedConnection)
-                : job.SqlServer
-                    ?? throw new ConfigurationException(
-                        "CONNECTION_REQUIRED",
-                        "Job không có cấu hình kết nối."
-                    );
+            var sqlOptions =
+                savedConnection is not null
+                    ? SqlServerConnectionSettings
+                        .ForBackup(savedConnection)
+                    : job.SqlServer
+                        ?? throw new ConfigurationException(
+                            "CONNECTION_REQUIRED",
+                            "Job không có cấu hình kết nối."
+                        );
+
+            //
+            // Connection-specific transport.
+            //
+            // Null intentionally means:
+            // use legacy/global RemoteStorage configuration.
+            //
+            var backupTransport =
+                savedConnection?.Settings.BackupTransport;
 
             Log(
                 run,
@@ -89,14 +123,42 @@ public sealed class BackupPipeline(
                 $"Connecting to SQL Server: {sqlOptions.Server}"
             );
 
+            if (backupTransport is not null)
+            {
+                Log(
+                    run,
+                    RunLogLevel.Information,
+                    BackupStage.Connecting,
+                    null,
+                    backupTransport.Enabled
+                        ? $"Connection-specific backup transport selected. SSH host: {backupTransport.SshHost}; rclone remote: {backupTransport.RcloneRemote}."
+                        : "Connection-specific remote backup transport is disabled."
+                );
+            }
+            else
+            {
+                Log(
+                    run,
+                    RunLogLevel.Information,
+                    BackupStage.Connecting,
+                    null,
+                    "No connection-specific backup transport configured. Using legacy/global remote storage configuration."
+                );
+            }
+
             await store.SaveRunAsync(run);
 
             //
             // SQL Server backup + RESTORE VERIFYONLY.
             //
-            var backupStage = AddStage(run, "Backup and verify databases");
+            var backupStage =
+                AddStage(
+                    run,
+                    "Backup and verify databases"
+                );
 
-            run.CurrentStage = BackupStage.BackingUp;
+            run.CurrentStage =
+                BackupStage.BackingUp;
 
             await store.SaveRunAsync(run);
 
@@ -104,17 +166,24 @@ public sealed class BackupPipeline(
             {
                 ct.ThrowIfCancellationRequested();
 
-                var databaseRun = run.Databases.First(x => x.Database == database);
+                var databaseRun =
+                    run.Databases.First(
+                        x => x.Database == database
+                    );
 
                 run.CurrentDatabase = database;
 
-                run.CurrentStage = BackupStage.BackingUp;
+                run.CurrentStage =
+                    BackupStage.BackingUp;
 
-                databaseRun.Status = RunStatus.Running;
+                databaseRun.Status =
+                    RunStatus.Running;
 
-                databaseRun.Stage = BackupStage.BackingUp;
+                databaseRun.Stage =
+                    BackupStage.BackingUp;
 
-                databaseRun.StartedAt = DateTimeOffset.UtcNow;
+                databaseRun.StartedAt =
+                    DateTimeOffset.UtcNow;
 
                 Log(
                     run,
@@ -128,23 +197,29 @@ public sealed class BackupPipeline(
 
                 try
                 {
-                    var result = await sql.BackupAsync(
-                        sqlOptions,
-                        database,
-                        sqlServerRunDirectory,
-                        ct,
-                        password
-                    );
+                    var result =
+                        await sql.BackupAsync(
+                            sqlOptions,
+                            database,
+                            sqlServerRunDirectory,
+                            ct,
+                            password
+                        );
 
-                    databaseRun.BackupPath = result.Path;
+                    databaseRun.BackupPath =
+                        result.Path;
 
-                    databaseRun.BackupSize = result.Size;
+                    databaseRun.BackupSize =
+                        result.Size;
 
-                    databaseRun.SqlOutput = result.Output;
+                    databaseRun.SqlOutput =
+                        result.Output;
 
-                    databaseRun.Stage = BackupStage.Verifying;
+                    databaseRun.Stage =
+                        BackupStage.Verifying;
 
-                    run.CurrentStage = BackupStage.Verifying;
+                    run.CurrentStage =
+                        BackupStage.Verifying;
 
                     Log(
                         run,
@@ -154,7 +229,9 @@ public sealed class BackupPipeline(
                         $"BACKUP DATABASE and RESTORE VERIFYONLY completed. Path: {result.Path}"
                     );
 
-                    if (!string.IsNullOrWhiteSpace(result.Output))
+                    if (!string.IsNullOrWhiteSpace(
+                            result.Output
+                        ))
                     {
                         Log(
                             run,
@@ -165,19 +242,29 @@ public sealed class BackupPipeline(
                         );
                     }
 
-                    databaseRun.Status = RunStatus.Succeeded;
+                    databaseRun.Status =
+                        RunStatus.Succeeded;
 
-                    databaseRun.Stage = BackupStage.Completed;
+                    databaseRun.Stage =
+                        BackupStage.Completed;
 
-                    databaseRun.FinishedAt = DateTimeOffset.UtcNow;
+                    databaseRun.FinishedAt =
+                        DateTimeOffset.UtcNow;
 
                     run.CompletedDatabases++;
                     run.SucceededDatabases++;
 
                     //
-                    // This artifact is server-side on the SQL Server host.
+                    // This artifact is server-side
+                    // on the SQL Server host.
                     //
-                    run.Artifacts.Add(new BackupArtifact(result.Path, result.Size ?? 0, ""));
+                    run.Artifacts.Add(
+                        new BackupArtifact(
+                            result.Path,
+                            result.Size ?? 0,
+                            ""
+                        )
+                    );
 
                     backupStage.Message =
                         $"{run.CompletedDatabases}/{run.TotalDatabases} database(s) completed.";
@@ -196,42 +283,60 @@ public sealed class BackupPipeline(
                 }
                 catch (OperationCanceledException)
                 {
-                    databaseRun.Status = RunStatus.Cancelled;
+                    databaseRun.Status =
+                        RunStatus.Cancelled;
 
-                    databaseRun.FinishedAt = DateTimeOffset.UtcNow;
+                    databaseRun.FinishedAt =
+                        DateTimeOffset.UtcNow;
 
-                    databaseRun.Error = "Backup cancelled.";
+                    databaseRun.Error =
+                        "Backup cancelled.";
 
                     throw;
                 }
                 catch (Exception ex)
                 {
-                    databaseRun.Status = RunStatus.Failed;
+                    databaseRun.Status =
+                        RunStatus.Failed;
 
-                    databaseRun.Stage = BackupStage.Failed;
+                    databaseRun.Stage =
+                        BackupStage.Failed;
 
-                    databaseRun.FinishedAt = DateTimeOffset.UtcNow;
+                    databaseRun.FinishedAt =
+                        DateTimeOffset.UtcNow;
 
-                    databaseRun.Error = ex.Message;
+                    databaseRun.Error =
+                        ex.Message;
 
                     run.CompletedDatabases++;
                     run.FailedDatabases++;
 
-                    run.CurrentStage = BackupStage.Failed;
+                    run.CurrentStage =
+                        BackupStage.Failed;
 
-                    backupStage.Status = RunStatus.Failed;
+                    backupStage.Status =
+                        RunStatus.Failed;
 
-                    backupStage.Message = ex.Message;
+                    backupStage.Message =
+                        ex.Message;
 
-                    backupStage.FinishedAt = DateTimeOffset.UtcNow;
+                    backupStage.FinishedAt =
+                        DateTimeOffset.UtcNow;
 
-                    Log(run, RunLogLevel.Error, BackupStage.Failed, database, ex.Message);
+                    Log(
+                        run,
+                        RunLogLevel.Error,
+                        BackupStage.Failed,
+                        database,
+                        ex.Message
+                    );
 
                     await store.SaveRunAsync(run);
 
                     //
                     // Current policy:
-                    // stop immediately on first failed database.
+                    // stop immediately on first
+                    // failed database.
                     //
                     throw;
                 }
@@ -249,11 +354,18 @@ public sealed class BackupPipeline(
             //
             // Remote storage.
             //
-            if (remoteStorage.Enabled)
+            if (remoteStorage.IsEnabled(
+                    backupTransport
+                ))
             {
-                var transferStage = AddStage(run, "Upload backup to Google Drive");
+                var transferStage =
+                    AddStage(
+                        run,
+                        "Upload backup to Google Drive"
+                    );
 
-                run.CurrentStage = BackupStage.Transferring;
+                run.CurrentStage =
+                    BackupStage.Transferring;
 
                 Log(
                     run,
@@ -267,17 +379,23 @@ public sealed class BackupPipeline(
 
                 try
                 {
-                    var uploadResult = await remoteStorage.UploadAndVerifyAsync(
-                        sqlServerRunDirectory,
-                        job.Name,
-                        run.StartedAt ?? DateTimeOffset.UtcNow,
-                        runFolderName,
-                        ct
-                    );
+                    var uploadResult =
+                        await remoteStorage
+                            .UploadAndVerifyAsync(
+                                sqlServerRunDirectory,
+                                job.Name,
+                                run.StartedAt
+                                    ?? DateTimeOffset.UtcNow,
+                                runFolderName,
+                                backupTransport,
+                                ct
+                            );
 
-                    run.RemoteBackupDirectory = uploadResult.Destination;
+                    run.RemoteBackupDirectory =
+                        uploadResult.Destination;
 
-                    transferStage.Message = $"Upload completed: {uploadResult.Destination}";
+                    transferStage.Message =
+                        $"Upload completed: {uploadResult.Destination}";
 
                     Log(
                         run,
@@ -287,7 +405,9 @@ public sealed class BackupPipeline(
                         $"Google Drive upload completed. Destination: {uploadResult.Destination}"
                     );
 
-                    if (!string.IsNullOrWhiteSpace(uploadResult.UploadOutput))
+                    if (!string.IsNullOrWhiteSpace(
+                            uploadResult.UploadOutput
+                        ))
                     {
                         Log(
                             run,
@@ -299,15 +419,19 @@ public sealed class BackupPipeline(
                     }
 
                     //
-                    // UploadAndVerifyAsync performs rclone check
-                    // before returning when verification is enabled.
+                    // UploadAndVerifyAsync performs
+                    // rclone check before returning
+                    // when verification is enabled.
                     //
-                    run.CurrentStage = BackupStage.VerifyingUpload;
+                    run.CurrentStage =
+                        BackupStage.VerifyingUpload;
 
                     transferStage.Message =
                         $"Upload completed and remote verification passed: {uploadResult.Destination}";
 
-                    if (!string.IsNullOrWhiteSpace(uploadResult.VerificationOutput))
+                    if (!string.IsNullOrWhiteSpace(
+                            uploadResult.VerificationOutput
+                        ))
                     {
                         Log(
                             run,
@@ -335,23 +459,30 @@ public sealed class BackupPipeline(
                 }
                 catch (OperationCanceledException)
                 {
-                    transferStage.Status = RunStatus.Cancelled;
+                    transferStage.Status =
+                        RunStatus.Cancelled;
 
-                    transferStage.Message = "Google Drive upload cancelled.";
+                    transferStage.Message =
+                        "Google Drive upload cancelled.";
 
-                    transferStage.FinishedAt = DateTimeOffset.UtcNow;
+                    transferStage.FinishedAt =
+                        DateTimeOffset.UtcNow;
 
                     throw;
                 }
                 catch (Exception ex)
                 {
-                    transferStage.Status = RunStatus.Failed;
+                    transferStage.Status =
+                        RunStatus.Failed;
 
-                    transferStage.Message = ex.Message;
+                    transferStage.Message =
+                        ex.Message;
 
-                    transferStage.FinishedAt = DateTimeOffset.UtcNow;
+                    transferStage.FinishedAt =
+                        DateTimeOffset.UtcNow;
 
-                    run.CurrentStage = BackupStage.Failed;
+                    run.CurrentStage =
+                        BackupStage.Failed;
 
                     Log(
                         run,
@@ -378,18 +509,23 @@ public sealed class BackupPipeline(
             }
 
             //
-            // Only reach Succeeded after remote upload/verification
-            // when remote storage is enabled.
+            // Only reach Succeeded after remote
+            // upload/verification when enabled.
             //
             run.CurrentDatabase = null;
 
-            run.CurrentStage = BackupStage.Completed;
+            run.CurrentStage =
+                BackupStage.Completed;
 
-            run.Status = RunStatus.Succeeded;
+            run.Status =
+                RunStatus.Succeeded;
 
-            var finalLocation = !string.IsNullOrWhiteSpace(run.RemoteBackupDirectory)
-                ? run.RemoteBackupDirectory
-                : sqlServerRunDirectory;
+            var finalLocation =
+                !string.IsNullOrWhiteSpace(
+                    run.RemoteBackupDirectory
+                )
+                    ? run.RemoteBackupDirectory
+                    : sqlServerRunDirectory;
 
             Log(
                 run,
@@ -401,21 +537,30 @@ public sealed class BackupPipeline(
         }
         catch (OperationCanceledException)
         {
-            run.Status = RunStatus.Cancelled;
+            run.Status =
+                RunStatus.Cancelled;
 
-            run.CurrentStage = BackupStage.Failed;
+            run.CurrentStage =
+                BackupStage.Failed;
 
-            run.Error = "Run cancelled.";
+            run.Error =
+                "Run cancelled.";
 
-            var active = run.Stages.LastOrDefault(x => x.Status == RunStatus.Running);
+            var active =
+                run.Stages.LastOrDefault(
+                    x => x.Status == RunStatus.Running
+                );
 
             if (active is not null)
             {
-                active.Status = RunStatus.Cancelled;
+                active.Status =
+                    RunStatus.Cancelled;
 
-                active.Message = "Run cancelled.";
+                active.Message =
+                    "Run cancelled.";
 
-                active.FinishedAt = DateTimeOffset.UtcNow;
+                active.FinishedAt =
+                    DateTimeOffset.UtcNow;
             }
 
             Log(
@@ -428,40 +573,61 @@ public sealed class BackupPipeline(
         }
         catch (Exception ex)
         {
-            run.Status = RunStatus.Failed;
+            run.Status =
+                RunStatus.Failed;
 
-            run.CurrentStage = BackupStage.Failed;
+            run.CurrentStage =
+                BackupStage.Failed;
 
-            run.Error = ex.Message;
+            run.Error =
+                ex.Message;
 
-            var active = run.Stages.LastOrDefault(x => x.Status == RunStatus.Running);
+            var active =
+                run.Stages.LastOrDefault(
+                    x => x.Status == RunStatus.Running
+                );
 
             if (active is not null)
             {
-                active.Status = RunStatus.Failed;
+                active.Status =
+                    RunStatus.Failed;
 
-                active.Message = ex.Message;
+                active.Message =
+                    ex.Message;
 
-                active.FinishedAt = DateTimeOffset.UtcNow;
+                active.FinishedAt =
+                    DateTimeOffset.UtcNow;
             }
 
-            Log(run, RunLogLevel.Error, BackupStage.Failed, run.CurrentDatabase, ex.Message);
+            Log(
+                run,
+                RunLogLevel.Error,
+                BackupStage.Failed,
+                run.CurrentDatabase,
+                ex.Message
+            );
         }
         finally
         {
-            run.FinishedAt = DateTimeOffset.UtcNow;
+            run.FinishedAt =
+                DateTimeOffset.UtcNow;
 
             await store.SaveRunAsync(run);
 
             try
             {
-                await NotifyAsync(job, run, CancellationToken.None);
+                await NotifyAsync(
+                    job,
+                    run,
+                    CancellationToken.None
+                );
             }
             catch (Exception ex)
             {
                 //
-                // Notification failure must never change
-                // a successful backup into Failed.
+                // Notification failure must never
+                // change a successful backup
+                // into Failed.
                 //
                 Log(
                     run,
@@ -478,17 +644,27 @@ public sealed class BackupPipeline(
         return run;
     }
 
-    private async Task NotifyAsync(BackupJob job, BackupRun run, CancellationToken ct)
+    private async Task NotifyAsync(
+        BackupJob job,
+        BackupRun run,
+        CancellationToken ct
+    )
     {
         if (job.Telegram?.Enabled != true)
             return;
 
-        var token = await vault.ResolveAsync(job.Telegram.BotTokenSecret);
+        var token =
+            await vault.ResolveAsync(
+                job.Telegram.BotTokenSecret
+            );
 
         if (string.IsNullOrWhiteSpace(token))
             return;
 
-        var status = run.Status == RunStatus.Succeeded ? "✅ SUCCESS" : $"❌ {run.Status}";
+        var status =
+            run.Status == RunStatus.Succeeded
+                ? "✅ SUCCESS"
+                : $"❌ {run.Status}";
 
         var message =
             $"{job.Telegram.Prefix} - {status}\n"
@@ -497,14 +673,20 @@ public sealed class BackupPipeline(
             + $"Failed: {run.FailedDatabases}\n"
             + $"SQL path: {run.SqlServerRunDirectory}";
 
-        if (!string.IsNullOrWhiteSpace(run.RemoteBackupDirectory))
+        if (!string.IsNullOrWhiteSpace(
+                run.RemoteBackupDirectory
+            ))
         {
-            message += $"\nRemote path: {run.RemoteBackupDirectory}";
+            message +=
+                $"\nRemote path: {run.RemoteBackupDirectory}";
         }
 
-        if (!string.IsNullOrWhiteSpace(run.Error))
+        if (!string.IsNullOrWhiteSpace(
+                run.Error
+            ))
         {
-            message += $"\nError: {run.Error}";
+            message +=
+                $"\nError: {run.Error}";
         }
 
         await clients
@@ -513,35 +695,48 @@ public sealed class BackupPipeline(
                 $"https://api.telegram.org/bot{token}/sendMessage",
                 new
                 {
-                    chat_id = job.Telegram.ChatId,
+                    chat_id =
+                        job.Telegram.ChatId,
 
-                    text = message,
+                    text =
+                        message,
                 },
                 ct
             );
     }
 
-    private static RunStage AddStage(BackupRun run, string name)
+    private static RunStage AddStage(
+        BackupRun run,
+        string name
+    )
     {
-        var stage = new RunStage(name)
-        {
-            Status = RunStatus.Running,
+        var stage =
+            new RunStage(name)
+            {
+                Status = RunStatus.Running,
 
-            StartedAt = DateTimeOffset.UtcNow,
-        };
+                StartedAt =
+                    DateTimeOffset.UtcNow,
+            };
 
         run.Stages.Add(stage);
 
         return stage;
     }
 
-    private static void Complete(RunStage stage, string message)
+    private static void Complete(
+        RunStage stage,
+        string message
+    )
     {
-        stage.Status = RunStatus.Succeeded;
+        stage.Status =
+            RunStatus.Succeeded;
 
-        stage.Message = message;
+        stage.Message =
+            message;
 
-        stage.FinishedAt = DateTimeOffset.UtcNow;
+        stage.FinishedAt =
+            DateTimeOffset.UtcNow;
     }
 
     private static void Log(
@@ -558,53 +753,92 @@ public sealed class BackupPipeline(
         run.Logs.Add(
             new RunLog
             {
-                Timestamp = DateTimeOffset.UtcNow,
+                Timestamp =
+                    DateTimeOffset.UtcNow,
 
-                Level = level,
+                Level =
+                    level,
 
-                Stage = stage,
+                Stage =
+                    stage,
 
-                Database = database,
+                Database =
+                    database,
 
-                Message = message,
+                Message =
+                    message,
             }
         );
 
         //
-        // Prevent runs.json from growing indefinitely.
+        // Prevent runs.json from growing
+        // indefinitely.
         //
         if (run.Logs.Count > 2000)
         {
-            run.Logs.RemoveRange(0, run.Logs.Count - 2000);
+            run.Logs.RemoveRange(
+                0,
+                run.Logs.Count - 2000
+            );
         }
     }
 
-    private static string Sanitize(string value)
+    private static string Sanitize(
+        string value
+    )
     {
-        var invalid = Path.GetInvalidFileNameChars();
+        var invalid =
+            Path.GetInvalidFileNameChars();
 
-        return string.Concat(value.Select(ch => invalid.Contains(ch) ? '_' : ch));
+        return string.Concat(
+            value.Select(
+                ch =>
+                    invalid.Contains(ch)
+                        ? '_'
+                        : ch
+            )
+        );
     }
 
-    private static string CombineServerPath(string directory, string name)
+    private static string CombineServerPath(
+        string directory,
+        string name
+    )
     {
-        directory = directory.Trim().TrimEnd('/', '\\');
+        directory =
+            directory
+                .Trim()
+                .TrimEnd('/', '\\');
 
         if (directory.StartsWith('/'))
+        {
             return $"{directory}/{name}";
+        }
 
         return $"{directory}\\{name}";
     }
 
-    private static string FormatBytes(long bytes)
+    private static string FormatBytes(
+        long bytes
+    )
     {
-        string[] units = ["B", "KB", "MB", "GB", "TB"];
+        string[] units =
+        [
+            "B",
+            "KB",
+            "MB",
+            "GB",
+            "TB"
+        ];
 
         double value = bytes;
 
         var unit = 0;
 
-        while (value >= 1024 && unit < units.Length - 1)
+        while (
+            value >= 1024
+            && unit < units.Length - 1
+        )
         {
             value /= 1024;
             unit++;

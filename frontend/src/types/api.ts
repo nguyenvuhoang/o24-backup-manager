@@ -14,6 +14,7 @@ export type BackupStage =
   | 'Verifying'
   | 'Compressing'
   | 'Transferring'
+  | 'VerifyingUpload'
   | 'RetentionCleanup'
   | 'Notifying'
   | 'Completed'
@@ -29,6 +30,12 @@ export interface SqlServerOptions {
   integratedSecurity: boolean;
   username?: string;
   passwordSecret?: string;
+}
+
+export interface BackupSchedule {
+  enabled: boolean;
+  time: string;
+  timeZone: string;
 }
 
 export interface BackupJob {
@@ -52,6 +59,8 @@ export interface BackupJob {
   backupDirectory: string;
 
   retentionDays: number;
+
+  schedule?: BackupSchedule;
 
   sftp?: {
     enabled: boolean;
@@ -129,6 +138,7 @@ export interface BackupRun {
   sqlServerBackupDirectory?: string | null;
   sqlServerRunDirectory?: string | null;
   backupDirectory?: string | null;
+  remoteBackupDirectory?: string | null;
 
   artifacts: BackupArtifact[];
   stages: RunStage[];
@@ -161,6 +171,24 @@ export interface DatabaseConnectionForm {
   connectionTimeout: number;
   commandTimeout: number;
   applicationName: string;
+}
+
+export interface BackupTransportSettings {
+  enabled: boolean;
+  sshHost: string;
+  sshPort: number;
+  sshUser: string;
+  sshPrivateKeyPath: string;
+  rcloneRemote: string;
+  rootPath: string;
+  verifyAfterUpload: boolean;
+  connectTimeoutSeconds: number;
+  uploadTimeoutMinutes: number;
+}
+
+export interface BackupTransportTestResult {
+  success: boolean;
+  message: string;
 }
 
 export interface DatabaseServerInfo {
@@ -197,6 +225,7 @@ export interface SavedDatabaseConnection
   hasPassword: boolean;
   createdAtUtc: string;
   updatedAtUtc: string;
+  backupTransport?: BackupTransportSettings | null;
 }
 
 export interface CreateBackupJobRequest {
@@ -207,4 +236,5 @@ export interface CreateBackupJobRequest {
   backupDirectory: string;
   retentionDays: number;
   enabled: boolean;
+  schedule?: BackupSchedule;
 }
