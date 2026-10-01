@@ -1,6 +1,7 @@
 import type {
   BackupJob,
   BackupRun,
+  BackupRuntime,
   BackupTransportSettings,
   BackupTransportTestResult,
   CreateBackupJobRequest,
@@ -222,6 +223,11 @@ export const api = {
   runs: () =>
     request<BackupRun[]>(
       '/runs'
+    ),
+
+  runtime: () =>
+    request<BackupRuntime>(
+      '/runtime'
     ),
 
   run: (

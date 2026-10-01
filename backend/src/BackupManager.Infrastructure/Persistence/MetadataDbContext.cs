@@ -5,8 +5,9 @@ using System.Text.Json;
 
 namespace BackupManager.Infrastructure.Persistence;
 
-public sealed class MetadataDbContext(DbContextOptions<MetadataDbContext> options)
-    : DbContext(options)
+public sealed class MetadataDbContext(
+    DbContextOptions<MetadataDbContext> options
+) : DbContext(options)
 {
     public DbSet<DatabaseConnection> DatabaseConnections =>
         Set<DatabaseConnection>();
@@ -20,101 +21,211 @@ public sealed class MetadataDbContext(DbContextOptions<MetadataDbContext> option
     public DbSet<MetadataState> MetadataStates =>
         Set<MetadataState>();
 
-    protected override void OnModelCreating(ModelBuilder model)
+    protected override void OnModelCreating(
+        ModelBuilder model)
     {
-        var c = model.Entity<DatabaseConnection>();
+        var c =
+            model.Entity<DatabaseConnection>();
 
-        c.ToTable("DatabaseConnections");
+        c.ToTable(
+            "DatabaseConnections"
+        );
 
-        c.HasKey(x => x.Id);
+        c.HasKey(
+            x => x.Id
+        );
 
-        c.Ignore(x => x.PasswordSecret);
+        c.Ignore(
+            x => x.PasswordSecret
+        );
 
-        c.OwnsOne(x => x.Settings, settings =>
-        {
-            //
-            // Map scalar properties automatically.
-            //
-            // BackupTransport is a complex object and is mapped
-            // separately below as JSON.
-            //
-            foreach (var property in typeof(DatabaseConnectionSettings)
-                         .GetProperties()
-                         .Where(x => x.Name != nameof(DatabaseConnectionSettings.BackupTransport)))
+        c.OwnsOne(
+            x => x.Settings,
+            settings =>
             {
-                settings
-                    .Property(property.Name)
-                    .HasColumnName(property.Name);
-            }
-
-            settings
-                .Property(x => x.Name)
-                .IsRequired()
-                .HasMaxLength(200);
-
-            settings
-                .Property(x => x.Provider)
-                .IsRequired();
-
-            settings
-                .Property(x => x.Host)
-                .IsRequired();
-
-            //
-            // Store transport settings as JSON.
-            //
-            // This keeps the schema simple and allows transport
-            // configuration to grow without adding a database
-            // column for every SSH/rclone option.
-            //
-            settings
-                .Property(x => x.BackupTransport)
-                .HasColumnName("BackupTransportJson")
-                .HasConversion(
-                    value => value == null
-                        ? null
-                        : JsonSerializer.Serialize(
-                            value,
-                            (JsonSerializerOptions?)null
-                        ),
-                    value => string.IsNullOrWhiteSpace(value)
-                        ? null
-                        : JsonSerializer.Deserialize<BackupTransportSettings>(
-                            value,
-                            (JsonSerializerOptions?)null
+                //
+                // Map scalar properties automatically.
+                //
+                // BackupTransport is a complex object and is
+                // mapped separately below as JSON.
+                //
+                foreach (
+                    var property
+                    in typeof(DatabaseConnectionSettings)
+                        .GetProperties()
+                        .Where(
+                            x =>
+                                x.Name
+                                != nameof(
+                                    DatabaseConnectionSettings
+                                        .BackupTransport
+                                )
                         )
-                );
-        });
+                )
+                {
+                    settings
+                        .Property(
+                            property.Name
+                        )
+                        .HasColumnName(
+                            property.Name
+                        );
+                }
 
-        c.Navigation(x => x.Settings)
+                settings
+                    .Property(
+                        x => x.Name
+                    )
+                    .IsRequired()
+                    .HasMaxLength(
+                        200
+                    );
+
+                settings
+                    .Property(
+                        x => x.Provider
+                    )
+                    .IsRequired();
+
+                settings
+                    .Property(
+                        x => x.Host
+                    )
+                    .IsRequired();
+
+                //
+                // Store transport settings as JSON.
+                //
+                // This keeps the schema simple and allows
+                // transport configuration to grow without
+                // adding a database column for every
+                // SSH/rclone option.
+                //
+                settings
+                    .Property(
+                        x => x.BackupTransport
+                    )
+                    .HasColumnName(
+                        "BackupTransportJson"
+                    )
+                    .HasConversion(
+                        value =>
+                            value == null
+                                ? null
+                                : JsonSerializer
+                                    .Serialize(
+                                        value,
+                                        (JsonSerializerOptions?)
+                                            null
+                                    ),
+
+                        value =>
+                            string.IsNullOrWhiteSpace(
+                                value
+                            )
+                                ? null
+                                : JsonSerializer
+                                    .Deserialize<
+                                        BackupTransportSettings
+                                    >(
+                                        value,
+                                        (JsonSerializerOptions?)
+                                            null
+                                    )
+                    );
+            }
+        );
+
+        c.Navigation(
+                x => x.Settings
+            )
             .IsRequired();
 
-        var j = model.Entity<BackupJobRow>();
+        var j =
+            model.Entity<BackupJobRow>();
 
-        j.ToTable("BackupJobs");
+        j.ToTable(
+            "BackupJobs"
+        );
 
-        j.HasKey(x => x.Id);
+        j.HasKey(
+            x => x.Id
+        );
+
+        j.Property(
+                x => x.Name
+            )
+            .IsRequired()
+            .HasMaxLength(
+                200
+            );
+
+        j.Property(
+                x => x.BackupDirectory
+            )
+            .IsRequired();
+
+        j.Property(
+                x => x.SqlServerBackupDirectory
+            )
+            .IsRequired();
+
+        j.Property(
+                x => x.ScheduleTime
+            )
+            .IsRequired()
+            .HasMaxLength(
+                5
+            );
+
+        j.Property(
+                x => x.ScheduleTimeZone
+            )
+            .IsRequired()
+            .HasMaxLength(
+                200
+            );
 
         j.HasOne<DatabaseConnection>()
             .WithMany()
-            .HasForeignKey(x => x.ConnectionId)
-            .OnDelete(DeleteBehavior.Restrict);
+            .HasForeignKey(
+                x => x.ConnectionId
+            )
+            .OnDelete(
+                DeleteBehavior.Restrict
+            );
 
-        j.HasMany(x => x.Databases)
+        j.HasMany(
+                x => x.Databases
+            )
             .WithOne()
-            .HasForeignKey(x => x.BackupJobId)
-            .OnDelete(DeleteBehavior.Cascade);
+            .HasForeignKey(
+                x => x.BackupJobId
+            )
+            .OnDelete(
+                DeleteBehavior.Cascade
+            );
 
-        model.Entity<BackupJobDatabaseRow>()
-            .ToTable("BackupJobDatabases")
-            .HasKey(x => new
-            {
-                x.BackupJobId,
-                x.DatabaseName
-            });
+        model.Entity<
+                BackupJobDatabaseRow
+            >()
+            .ToTable(
+                "BackupJobDatabases"
+            )
+            .HasKey(
+                x => new
+                {
+                    x.BackupJobId,
+                    x.DatabaseName
+                }
+            );
 
-        model.Entity<MetadataState>()
-            .HasKey(x => x.Key);
+        model.Entity<
+                MetadataState
+            >()
+            .HasKey(
+                x => x.Key
+            );
     }
 }
 
@@ -128,100 +239,305 @@ public sealed class BackupJobRow
 
     public bool Enabled { get; set; }
 
-    public string BackupDirectory { get; set; } = "";
+    //
+    // Directory visible to SQL Server itself.
+    //
+    public string SqlServerBackupDirectory
+    {
+        get;
+        set;
+    } =
+        "/var/opt/mssql/backup/backup-manager";
 
-    public int RetentionDays { get; set; }
+    //
+    // Directory local to BackupManager.
+    //
+    public string BackupDirectory
+    {
+        get;
+        set;
+    } = "data/backups";
 
-    public string? SftpJson { get; set; }
+    //
+    // Persist schedule explicitly.
+    //
+    // These values previously existed only on
+    // BackupJob and were lost whenever the job
+    // was converted to/from BackupJobRow.
+    //
+    public bool ScheduleEnabled
+    {
+        get;
+        set;
+    } = true;
 
-    public string? TelegramJson { get; set; }
+    public string ScheduleTime
+    {
+        get;
+        set;
+    } = "03:00";
+
+    public string ScheduleTimeZone
+    {
+        get;
+        set;
+    } = "Asia/Vientiane";
+
+    public int RetentionDays
+    {
+        get;
+        set;
+    }
+
+    public string? SftpJson
+    {
+        get;
+        set;
+    }
+
+    public string? TelegramJson
+    {
+        get;
+        set;
+    }
 
     //
     // Read-only compatibility for imported jobs;
     // new writes use ConnectionId.
     //
-    public string? LegacySqlServerJson { get; set; }
-
-    public List<BackupJobDatabaseRow> Databases { get; set; } = [];
-
-    public static BackupJobRow From(BackupJob job) => new()
+    public string? LegacySqlServerJson
     {
-        Id = job.Id,
-        Name = job.Name,
-        ConnectionId = job.ConnectionId,
-        Enabled = job.Enabled,
-        BackupDirectory = job.BackupDirectory,
-        RetentionDays = job.RetentionDays,
+        get;
+        set;
+    }
 
-        SftpJson = job.Sftp is null
-            ? null
-            : JsonSerializer.Serialize(job.Sftp),
-
-        TelegramJson = job.Telegram is null
-            ? null
-            : JsonSerializer.Serialize(job.Telegram),
-
-        LegacySqlServerJson =
-            job.ConnectionId is null && job.SqlServer is not null
-                ? JsonSerializer.Serialize(job.SqlServer)
-                : null,
-
-        Databases = job.Databases
-            .Distinct(StringComparer.Ordinal)
-            .Select(n => new BackupJobDatabaseRow
-            {
-                BackupJobId = job.Id,
-                DatabaseName = n
-            })
-            .ToList()
-    };
-
-    public BackupJob ToDomain() => new()
+    public List<BackupJobDatabaseRow>
+        Databases
     {
-        Id = Id,
-        Name = Name,
-        ConnectionId = ConnectionId,
-        Enabled = Enabled,
-        BackupDirectory = BackupDirectory,
-        RetentionDays = RetentionDays,
+        get;
+        set;
+    } = [];
 
-        Sftp = SftpJson is null
-            ? null
-            : JsonSerializer.Deserialize<SftpOptions>(SftpJson),
+    public static BackupJobRow From(
+        BackupJob job)
+    {
+        var schedule =
+            job.Schedule
+            ?? new BackupSchedule();
 
-        Telegram = TelegramJson is null
-            ? null
-            : JsonSerializer.Deserialize<TelegramOptions>(TelegramJson),
+        return new BackupJobRow
+        {
+            Id =
+                job.Id,
 
-        SqlServer = LegacySqlServerJson is null
-            ? null
-            : JsonSerializer.Deserialize<SqlServerOptions>(LegacySqlServerJson),
+            Name =
+                job.Name,
 
-        Databases = Databases
-            .Select(x => x.DatabaseName)
-            .ToArray()
-    };
+            ConnectionId =
+                job.ConnectionId,
+
+            Enabled =
+                job.Enabled,
+
+            SqlServerBackupDirectory =
+                string.IsNullOrWhiteSpace(
+                    job.SqlServerBackupDirectory
+                )
+                    ? "/var/opt/mssql/backup/backup-manager"
+                    : job.SqlServerBackupDirectory,
+
+            BackupDirectory =
+                job.BackupDirectory,
+
+            ScheduleEnabled =
+                schedule.Enabled,
+
+            ScheduleTime =
+                string.IsNullOrWhiteSpace(
+                    schedule.Time
+                )
+                    ? "03:00"
+                    : schedule.Time,
+
+            ScheduleTimeZone =
+                string.IsNullOrWhiteSpace(
+                    schedule.TimeZone
+                )
+                    ? "Asia/Vientiane"
+                    : schedule.TimeZone,
+
+            RetentionDays =
+                job.RetentionDays,
+
+            SftpJson =
+                job.Sftp is null
+                    ? null
+                    : JsonSerializer.Serialize(
+                        job.Sftp
+                    ),
+
+            TelegramJson =
+                job.Telegram is null
+                    ? null
+                    : JsonSerializer.Serialize(
+                        job.Telegram
+                    ),
+
+            LegacySqlServerJson =
+                job.ConnectionId is null
+                && job.SqlServer is not null
+                    ? JsonSerializer.Serialize(
+                        job.SqlServer
+                    )
+                    : null,
+
+            Databases =
+                job.Databases
+                    .Distinct(
+                        StringComparer.Ordinal
+                    )
+                    .Select(
+                        databaseName =>
+                            new BackupJobDatabaseRow
+                            {
+                                BackupJobId =
+                                    job.Id,
+
+                                DatabaseName =
+                                    databaseName
+                            }
+                    )
+                    .ToList()
+        };
+    }
+
+    public BackupJob ToDomain() =>
+        new()
+        {
+            Id =
+                Id,
+
+            Name =
+                Name,
+
+            ConnectionId =
+                ConnectionId,
+
+            Enabled =
+                Enabled,
+
+            SqlServerBackupDirectory =
+                string.IsNullOrWhiteSpace(
+                    SqlServerBackupDirectory
+                )
+                    ? "/var/opt/mssql/backup/backup-manager"
+                    : SqlServerBackupDirectory,
+
+            BackupDirectory =
+                BackupDirectory,
+
+            Schedule =
+                new BackupSchedule
+                {
+                    Enabled =
+                        ScheduleEnabled,
+
+                    Time =
+                        string.IsNullOrWhiteSpace(
+                            ScheduleTime
+                        )
+                            ? "03:00"
+                            : ScheduleTime,
+
+                    TimeZone =
+                        string.IsNullOrWhiteSpace(
+                            ScheduleTimeZone
+                        )
+                            ? "Asia/Vientiane"
+                            : ScheduleTimeZone
+                },
+
+            RetentionDays =
+                RetentionDays,
+
+            Sftp =
+                SftpJson is null
+                    ? null
+                    : JsonSerializer
+                        .Deserialize<
+                            SftpOptions
+                        >(
+                            SftpJson
+                        ),
+
+            Telegram =
+                TelegramJson is null
+                    ? null
+                    : JsonSerializer
+                        .Deserialize<
+                            TelegramOptions
+                        >(
+                            TelegramJson
+                        ),
+
+            SqlServer =
+                LegacySqlServerJson is null
+                    ? null
+                    : JsonSerializer
+                        .Deserialize<
+                            SqlServerOptions
+                        >(
+                            LegacySqlServerJson
+                        ),
+
+            Databases =
+                Databases
+                    .Select(
+                        x =>
+                            x.DatabaseName
+                    )
+                    .ToArray()
+        };
 }
 
 public sealed class BackupJobDatabaseRow
 {
-    public Guid BackupJobId { get; set; }
+    public Guid BackupJobId
+    {
+        get;
+        set;
+    }
 
-    public string DatabaseName { get; set; } = "";
+    public string DatabaseName
+    {
+        get;
+        set;
+    } = "";
 }
 
 public sealed class MetadataState
 {
-    public string Key { get; set; } = "";
+    public string Key
+    {
+        get;
+        set;
+    } = "";
 }
 
 public sealed class MetadataDesignFactory
-    : IDesignTimeDbContextFactory<MetadataDbContext>
+    : IDesignTimeDbContextFactory<
+        MetadataDbContext
+    >
 {
-    public MetadataDbContext CreateDbContext(string[] args) =>
+    public MetadataDbContext CreateDbContext(
+        string[] args) =>
         new(
-            new DbContextOptionsBuilder<MetadataDbContext>()
-                .UseSqlite("Data Source=data/backupmanager.db")
+            new DbContextOptionsBuilder<
+                    MetadataDbContext
+                >()
+                .UseSqlite(
+                    "Data Source=data/backupmanager.db"
+                )
                 .Options
         );
 }

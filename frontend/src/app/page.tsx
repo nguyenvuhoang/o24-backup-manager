@@ -13,60 +13,84 @@ import { History } from '@/features/history/history';
 import { api } from '@/lib/api/client';
 import { useRunEvents } from '@/lib/signalr/use-run-events';
 
-import type { BackupJob, BackupRun } from '@/types/api';
+import type {
+  BackupJob,
+  BackupRun,
+  BackupRuntime
+} from '@/types/api';
+
+const EMPTY_RUNTIME: BackupRuntime = {
+  currentJobId: null,
+  queuedCount: 0,
+  jobs: [],
+  schedules: []
+};
 
 export default function Home() {
-  const [view, setView] = useState('overview');
+  const [view, setView] =
+    useState('overview');
 
-  const [jobs, setJobs] = useState<BackupJob[]>([]);
-  const [runs, setRuns] = useState<BackupRun[]>([]);
+  const [jobs, setJobs] =
+    useState<BackupJob[]>([]);
 
-  const [error, setError] = useState('');
-  const [saved, setSaved] = useState(false);
+  const [runs, setRuns] =
+    useState<BackupRun[]>([]);
 
-  const [runningJobIds, setRunningJobIds] = useState<Set<string>>(
-    () => new Set()
+  const [runtime, setRuntime] =
+    useState<BackupRuntime>(
+      EMPTY_RUNTIME
+    );
+
+  const [editingJob, setEditingJob] =
+    useState<BackupJob | null>(null);
+
+  const [error, setError] =
+    useState('');
+
+  const [saved, setSaved] =
+    useState(false);
+
+  const load = useCallback(
+    async () => {
+      try {
+        const [
+          jobsResult,
+          runsResult,
+          runtimeResult
+        ] = await Promise.all([
+          api.jobs(),
+          api.runs(),
+          api.runtime()
+        ]);
+
+        setJobs(jobsResult);
+        setRuns(runsResult);
+        setRuntime(runtimeResult);
+
+        setError('');
+      } catch (err) {
+        console.error(err);
+
+        setError(
+          'Không kết nối được Backend .NET. Kiểm tra dịch vụ tại cổng 5088.'
+        );
+      }
+    },
+    []
   );
-
-  const load = useCallback(async () => {
-    try {
-      const [jobsResult, runsResult] = await Promise.all([
-        api.jobs(),
-        api.runs(),
-      ]);
-
-      setJobs(jobsResult);
-      setRuns(runsResult);
-
-      const currentlyRunning = new Set(
-        runsResult
-          .filter(
-            (run: BackupRun) =>
-              run.status === 'Running' || run.status === 'Queued'
-          )
-          .map((run: BackupRun) => run.jobId)
-      );
-
-      setRunningJobIds(currentlyRunning);
-
-      setError('');
-    } catch (err) {
-      console.error(err);
-
-      setError(
-        'Không kết nối được Backend .NET. Kiểm tra dịch vụ tại cổng 5088.'
-      );
-    }
-  }, []);
 
   useRunEvents(load);
 
   useEffect(() => {
     void load();
 
-    const timer = window.setInterval(() => {
-      void load();
-    }, 5000);
+    const timer =
+      window.setInterval(
+        () => {
+          void load();
+        },
+        5000
+      );
 
     return () => {
       window.clearInterval(timer);
@@ -74,38 +98,76 @@ export default function Home() {
   }, [load]);
 
   async function run(id: string) {
-    if (runningJobIds.has(id)) {
+    const existingRuntime =
+      runtime.jobs.find(
+        (item) => item.jobId === id
+      );
+
+    if (existingRuntime) {
       return;
     }
 
-    setRunningJobIds((current) => {
-      const next = new Set(current);
-      next.add(id);
-      return next;
-    });
+    setRuntime(
+      (current) => {
+        if (
+          current.jobs.some(
+            (item) => item.jobId === id
+          )
+        ) {
+          return current;
+        }
+
+        const hasRunningJob =
+          Boolean(current.currentJobId);
+
+        const queuePosition =
+          hasRunningJob
+            ? current.queuedCount + 1
+            : null;
+
+        return {
+          ...current,
+
+          queuedCount:
+            hasRunningJob
+              ? current.queuedCount + 1
+              : current.queuedCount,
+
+          jobs: [
+            ...current.jobs,
+            {
+              jobId: id,
+              state:
+                hasRunningJob
+                  ? 'Queued'
+                  : 'Running',
+              queuePosition
+            }
+          ]
+        };
+      }
+    );
 
     setError('');
 
     try {
       await api.run(id);
 
-      // Pull immediately so the new Queued/Running run appears
-      // without waiting for the regular 5-second polling cycle.
-      window.setTimeout(() => {
-        void load();
-      }, 300);
+      window.setTimeout(
+        () => {
+          void load();
+        },
+        200
+      );
 
-      window.setTimeout(() => {
-        void load();
-      }, 1000);
+      window.setTimeout(
+        () => {
+          void load();
+        },
+        800
+      );
     } catch (err) {
       console.error(err);
-
-      setRunningJobIds((current) => {
-        const next = new Set(current);
-        next.delete(id);
-        return next;
-      });
 
       setError(
         err instanceof Error
@@ -117,9 +179,37 @@ export default function Home() {
     }
   }
 
+  function createJob() {
+    setEditingJob(null);
+    setView('create');
+  }
+
+  function editJob(job: BackupJob) {
+    if (!job.id) {
+      return;
+    }
+
+    setEditingJob(job);
+    setView('edit');
+  }
+
+  function leaveJobForm() {
+    setEditingJob(null);
+    setView('overview');
+  }
+
   return (
     <div className="flex min-h-screen flex-col md:flex-row">
-      <Sidebar view={view} setView={setView} />
+      <Sidebar
+        view={view}
+        setView={(nextView) => {
+          if (nextView !== 'create' && nextView !== 'edit') {
+            setEditingJob(null);
+          }
+
+          setView(nextView);
+        }}
+      />
 
       <main className="w-full min-w-0 max-w-[1700px] flex-1 p-4 sm:p-6 xl:p-9">
         {saved && (
@@ -127,9 +217,12 @@ export default function Home() {
             <Notification
               notice={{
                 kind: 'success',
-                message: 'Đã lưu backup job thành công.',
+                message:
+                  'Đã lưu backup job thành công.'
               }}
-              onDismiss={() => setSaved(false)}
+              onDismiss={() =>
+                setSaved(false)
+              }
             />
           </div>
         )}
@@ -144,27 +237,40 @@ export default function Home() {
           <Dashboard
             jobs={jobs}
             runs={runs}
-            runningJobIds={runningJobIds}
+            runtime={runtime}
             onRun={run}
-            onCreate={() => setView('create')}
+            onCreate={createJob}
+            onEdit={editJob}
           />
         )}
 
-        {view === 'create' && (
+        {(view === 'create' || view === 'edit') && (
           <JobForm
-            onManage={() => setView('settings')}
-            onBack={() => setView('overview')}
+            initialJob={
+              view === 'edit'
+                ? editingJob
+                : null
+            }
+            onManage={() =>
+              setView('settings')
+            }
+            onBack={leaveJobForm}
             onSaved={() => {
               setSaved(true);
+              setEditingJob(null);
               setView('overview');
               void load();
             }}
           />
         )}
 
-        {view === 'history' && <History runs={runs} />}
+        {view === 'history' && (
+          <History runs={runs} />
+        )}
 
-        {view === 'settings' && <ConnectionManager />}
+        {view === 'settings' && (
+          <ConnectionManager />
+        )}
       </main>
     </div>
   );

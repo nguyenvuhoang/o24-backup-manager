@@ -1,29 +1,28 @@
-import type { DatabaseProvider } from '@/lib/database-providers';
+import type { DatabaseProvider } from "@/lib/database-providers";
 
 export type RunStatus =
-  | 'Queued'
-  | 'Running'
-  | 'Succeeded'
-  | 'Failed'
-  | 'Cancelled';
+  | "Queued"
+  | "Running"
+  | "Succeeded"
+  | "Failed"
+  | "Cancelled";
 
 export type BackupStage =
-  | 'Queued'
-  | 'Connecting'
-  | 'BackingUp'
-  | 'Verifying'
-  | 'Compressing'
-  | 'Transferring'
-  | 'VerifyingUpload'
-  | 'RetentionCleanup'
-  | 'Notifying'
-  | 'Completed'
-  | 'Failed';
+  | "Queued"
+  | "Connecting"
+  | "BackingUp"
+  | "Verifying"
+  | "Compressing"
+  | "Transferring"
+  | "VerifyingUpload"
+  | "RetentionCleanup"
+  | "Notifying"
+  | "Completed"
+  | "Failed";
 
-export type RunLogLevel =
-  | 'Information'
-  | 'Warning'
-  | 'Error';
+export type RunLogLevel = "Information" | "Warning" | "Error";
+
+export type RuntimeJobState = "Running" | "Queued";
 
 export interface SqlServerOptions {
   server: string;
@@ -149,6 +148,27 @@ export interface BackupRun {
   error?: string | null;
 }
 
+export interface RuntimeJobStatus {
+  jobId: string;
+  state: RuntimeJobState;
+  queuePosition?: number | null;
+}
+
+export interface RuntimeSchedule {
+  jobId: string;
+  enabled: boolean;
+  time: string;
+  timeZone: string;
+  nextRunAt?: string | null;
+}
+
+export interface BackupRuntime {
+  currentJobId?: string | null;
+  queuedCount: number;
+  jobs: RuntimeJobStatus[];
+  schedules?: RuntimeSchedule[];
+}
+
 export interface DiscoveryResult {
   success: boolean;
   message: string;
@@ -162,7 +182,7 @@ export interface DatabaseConnectionForm {
   port: number | null;
   instanceName: string | null;
   useNamedInstanceDiscovery?: boolean;
-  authenticationType: 'windows' | 'sqlserver';
+  authenticationType: "windows" | "sqlserver";
   username: string | null;
   password: string | null;
   database: string | null;
@@ -219,8 +239,10 @@ export interface DatabaseTestResult {
   message: string;
 }
 
-export interface SavedDatabaseConnection
-  extends Omit<DatabaseConnectionForm, 'password'> {
+export interface SavedDatabaseConnection extends Omit<
+  DatabaseConnectionForm,
+  "password"
+> {
   id: string;
   hasPassword: boolean;
   createdAtUtc: string;
@@ -236,5 +258,10 @@ export interface CreateBackupJobRequest {
   backupDirectory: string;
   retentionDays: number;
   enabled: boolean;
+
+  sqlServerBackupDirectory?: string;
   schedule?: BackupSchedule;
+
+  sftp?: BackupJob["sftp"];
+  telegram?: BackupJob["telegram"];
 }

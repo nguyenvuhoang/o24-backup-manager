@@ -111,6 +111,17 @@ builder.Services.AddSingleton<
 >();
 
 //
+// Shared schedule calculator.
+//
+// Both the background scheduler and the
+// /runtime endpoint use this exact same
+// schedule/timezone calculation.
+//
+builder.Services.AddSingleton<
+    BackupScheduleCalculator
+>();
+
+//
 // One shared RunCoordinator instance.
 //
 // It is both:
@@ -296,6 +307,128 @@ api.MapPost(
         )
 );
 
+//
+// Update only the automatic schedule of an
+// existing backup job.
+//
+// This intentionally bypasses BackupJobService
+// because changing the schedule does not require
+// database discovery or connection validation.
+//
+api.MapPut(
+    "/jobs/{id:guid}/schedule",
+    async (
+        Guid id,
+        BackupSchedule schedule,
+        IConfigurationStore store,
+        BackupScheduleCalculator
+            scheduleCalculator
+    ) =>
+    {
+        var jobs =
+            await store.GetJobsAsync();
+
+        var job =
+            jobs.FirstOrDefault(
+                x => x.Id == id
+            );
+
+        if (job is null)
+        {
+            return Results.NotFound(
+                new
+                {
+                    success = false,
+
+                    message =
+                        "Backup job không tồn tại."
+                }
+            );
+        }
+
+        if (
+            !scheduleCalculator
+                .TryParseScheduleTime(
+                    schedule.Time,
+                    out _
+                )
+        )
+        {
+            return Results.BadRequest(
+                new
+                {
+                    success = false,
+
+                    message =
+                        "Schedule time không hợp lệ. Định dạng yêu cầu HH:mm.",
+
+                    errorCode =
+                        "INVALID_SCHEDULE_TIME"
+                }
+            );
+        }
+
+        try
+        {
+            scheduleCalculator
+                .ResolveTimeZone(
+                    schedule.TimeZone
+                );
+        }
+        catch (Exception ex)
+            when (
+                ex is
+                    TimeZoneNotFoundException
+                or InvalidTimeZoneException
+            )
+        {
+            return Results.BadRequest(
+                new
+                {
+                    success = false,
+
+                    message =
+                        $"Timezone '{schedule.TimeZone}' không hợp lệ.",
+
+                    errorCode =
+                        "INVALID_TIMEZONE"
+                }
+            );
+        }
+
+        var normalizedSchedule =
+            schedule with
+            {
+                Time =
+                    schedule.Time.Trim(),
+
+                TimeZone =
+                    string.IsNullOrWhiteSpace(
+                        schedule.TimeZone
+                    )
+                        ? BackupScheduleCalculator
+                            .DefaultTimeZone
+                        : schedule.TimeZone.Trim()
+            };
+
+        var updatedJob =
+            job with
+            {
+                Schedule =
+                    normalizedSchedule
+            };
+
+        var savedJob =
+            await store.SaveJobAsync(
+                updatedJob
+            );
+
+        return Results.Ok(
+            savedJob
+        );
+    }
+);
+
 api.MapPost(
     "/secrets",
     async (
@@ -353,21 +486,59 @@ api.MapGet(
 );
 
 //
-// Runtime queue state.
+// Runtime state.
 //
-// This endpoint intentionally reports the live,
-// in-memory RunCoordinator state rather than
-// inferring queue state from persisted BackupRun
-// history.
+// Queue information comes directly from the
+// in-memory RunCoordinator.
+//
+// Schedule information is calculated by the
+// same BackupScheduleCalculator used by the
+// background scheduler.
 //
 api.MapGet(
     "/runtime",
-    (
-        RunCoordinator coordinator
+    async (
+        RunCoordinator coordinator,
+        IConfigurationStore store,
+        BackupScheduleCalculator
+            scheduleCalculator
     ) =>
-        Results.Ok(
-            coordinator.GetSnapshot()
-        )
+    {
+        var snapshot =
+            coordinator.GetSnapshot();
+
+        var jobs =
+            await store.GetJobsAsync();
+
+        //
+        // One reference timestamp for every job
+        // returned by this response.
+        //
+        var nowUtc =
+            DateTimeOffset.UtcNow;
+
+        var schedules =
+            jobs
+                .Select(
+                    job =>
+                        scheduleCalculator
+                            .GetScheduleInfo(
+                                job,
+                                nowUtc
+                            )
+                )
+                .ToArray();
+
+        return Results.Ok(
+            new
+            {
+                snapshot.CurrentJobId,
+                snapshot.QueuedCount,
+                snapshot.Jobs,
+                Schedules = schedules
+            }
+        );
+    }
 );
 
 api.MapPost(
