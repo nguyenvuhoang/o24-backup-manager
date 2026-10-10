@@ -12,7 +12,16 @@ public sealed class SecretVault(IHostEnvironment environment, IConfiguration con
     // Load once; configuration reloads must never silently change an active vault's key.
     private readonly byte[] _key = ReadMasterKey(configuration);
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private string VaultPath => Path.Combine(environment.ContentRootPath, "data", "secrets.json");
+
+    // Keep the original Windows DEV location unless explicitly overridden.
+    // On Linux set BackupManager__DataDirectory=/var/lib/o24-backup-manager/data.
+    private string DataPath =>
+        string.IsNullOrWhiteSpace(configuration["BackupManager:DataDirectory"])
+            ? Path.Combine(environment.ContentRootPath, "data")
+            : Path.GetFullPath(configuration["BackupManager:DataDirectory"]!.Trim());
+
+    private string VaultPath => Path.Combine(DataPath, "secrets.json");
+
     public string EncryptPassword(string value) => Convert.ToBase64String(Encrypt(Encoding.UTF8.GetBytes(value)));
     public string? DecryptPassword(string? value) => value is null ? null : Encoding.UTF8.GetString(Decrypt(Convert.FromBase64String(value)));
 
@@ -49,9 +58,10 @@ public sealed class SecretVault(IHostEnvironment environment, IConfiguration con
         try { var values = await ReadAsync(); values.Remove(name); await WriteAsync(values); }
         finally { _gate.Release(); }
     }
+
     private async Task WriteAsync(Dictionary<string, string> values)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(VaultPath)!);
+        Directory.CreateDirectory(DataPath);
         var temporary = VaultPath + ".tmp";
         await File.WriteAllTextAsync(temporary, JsonSerializer.Serialize(values));
         File.Move(temporary, VaultPath, true);

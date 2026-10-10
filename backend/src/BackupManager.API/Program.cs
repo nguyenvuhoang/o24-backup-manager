@@ -20,7 +20,10 @@ var secretVault =
         builder.Configuration
     );
 
+// Windows Service and Linux systemd integration.
+// Both extensions are context-aware and remain inactive during normal development.
 builder.Host.UseWindowsService();
+builder.Host.UseSystemd();
 
 builder.Services.AddSingleton<JsonStore>();
 builder.Services.AddSingleton(secretVault);
@@ -37,11 +40,18 @@ builder.Services.AddSingleton<
     RemoteBackupStorageService
 >();
 
+// Keep SQLite in the same configured data directory as JsonStore,
+// BackupSchedulerService and SecretVault. The default preserves Windows DEV data.
+var configuredDataDirectory =
+    builder.Configuration["BackupManager:DataDirectory"];
+
 var metadataDirectory =
-    Path.Combine(
-        builder.Environment.ContentRootPath,
-        "data"
-    );
+    string.IsNullOrWhiteSpace(configuredDataDirectory)
+        ? Path.Combine(
+            builder.Environment.ContentRootPath,
+            "data"
+        )
+        : Path.GetFullPath(configuredDataDirectory.Trim());
 
 Directory.CreateDirectory(
     metadataDirectory

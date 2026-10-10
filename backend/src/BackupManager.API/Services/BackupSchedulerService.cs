@@ -10,6 +10,7 @@ public sealed class BackupSchedulerService(
     RunCoordinator coordinator,
     BackupScheduleCalculator scheduleCalculator,
     IHostEnvironment environment,
+    IConfiguration configuration,
     ILogger<BackupSchedulerService> logger
 ) : BackgroundService
 {
@@ -48,11 +49,16 @@ public sealed class BackupSchedulerService(
             WriteIndented = true
         };
 
+    // Use the same configurable data directory as JsonStore and SQLite.
+    // Keep ContentRootPath/data as the default for existing Windows installs.
     private string DataPath =>
-        Path.Combine(
-            environment.ContentRootPath,
-            "data"
-        );
+        string.IsNullOrWhiteSpace(configuration["BackupManager:DataDirectory"])
+            ? Path.Combine(environment.ContentRootPath, "data")
+            : Path.GetFullPath(
+                Environment.ExpandEnvironmentVariables(
+                    configuration["BackupManager:DataDirectory"]!.Trim()
+                )
+            );
 
     private string SchedulerStatePath =>
         Path.Combine(

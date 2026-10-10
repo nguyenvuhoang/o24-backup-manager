@@ -2,11 +2,21 @@ using System.Text.Json;
 using BackupManager.Domain.Models;
 using BackupManager.Application.Connections;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Configuration;
 
 namespace BackupManager.Infrastructure.Services;
 
-public sealed class JsonStore(IHostEnvironment environment) : IConfigurationStore
+public sealed class JsonStore(
+    IHostEnvironment environment,
+    IConfiguration configuration) : IConfigurationStore
 {
+    // Backward-compatible constructor used by existing contract tests.
+    // Production DI uses the two-parameter constructor with app configuration.
+    public JsonStore(IHostEnvironment environment)
+        : this(environment, new ConfigurationBuilder().Build())
+    {
+    }
+
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     private readonly JsonSerializerOptions _json =
@@ -15,11 +25,19 @@ public sealed class JsonStore(IHostEnvironment environment) : IConfigurationStor
             WriteIndented = true
         };
 
-    private string DataPath =>
-        Path.Combine(
-            environment.ContentRootPath,
-            "data"
-        );
+    // All persistent stores must use the same configured directory.
+    // Default keeps existing Windows development installations unchanged.
+    private string DataPath
+    {
+        get
+        {
+            var configuredPath = configuration["BackupManager:DataDirectory"];
+
+            return string.IsNullOrWhiteSpace(configuredPath)
+                ? Path.Combine(environment.ContentRootPath, "data")
+                : Path.GetFullPath(configuredPath.Trim(), environment.ContentRootPath);
+        }
+    }
 
     private string JobsPath =>
         Path.Combine(
