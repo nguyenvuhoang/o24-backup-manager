@@ -1,0 +1,12 @@
+{
+  "jobs": {
+    "755b90d6-5715-474d-8113-73ac96460abf": {
+      "jobId": "755b90d6-5715-474d-8113-73ac96460abf",
+      "jobName": "EMI DEV 138",
+      "scheduleKey": "2026-10-01|16:56|Asia/Vientiane",
+      "scheduledFor": "2026-10-01T16:56:00+07:00",
+      "handledAtUtc": "2026-10-01T10:02:28.7827853+00:00",
+      "status": "Queued"
+    }
+  }
+}
