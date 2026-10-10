@@ -387,7 +387,7 @@ public sealed class RemoteBackupStorageService
             if (!process.Start())
             {
                 throw new InvalidOperationException(
-                    "Không thể khởi động ssh.exe."
+                    "Không thể khởi động SSH client."
                 );
             }
         }
@@ -395,7 +395,7 @@ public sealed class RemoteBackupStorageService
         {
             throw new InvalidOperationException(
                 $"Không thể khởi động SSH client '{sshExecutable}'. "
-                + "Kiểm tra Windows OpenSSH Client.",
+                + "Kiểm tra OpenSSH Client trên hệ điều hành hiện tại.",
                 ex
             );
         }
@@ -657,6 +657,13 @@ public sealed class RemoteBackupStorageService
 
     private static string ResolveSshExecutable()
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            return File.Exists("/usr/bin/ssh")
+                ? "/usr/bin/ssh"
+                : "ssh";
+        }
+
         var systemDirectory =
             Environment.GetFolderPath(
                 Environment.SpecialFolder.System
